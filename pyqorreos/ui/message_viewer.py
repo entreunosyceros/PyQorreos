@@ -39,6 +39,7 @@ class MessageViewer(QWidget):
     """Muestra el cuerpo de un correo en HTML o texto plano."""
 
     load_remote_images_requested = Signal()
+    link_hover_changed = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -109,15 +110,19 @@ class MessageViewer(QWidget):
         )
         self._stack.addWidget(self._text)
 
-    def _hide_link_warning(self) -> None:
+    def _clear_link_hover(self) -> None:
         self._hovered_link_url = ""
         self._link_warning.hide()
+        self.link_hover_changed.emit("")
 
     def _on_link_hovered(self, url: str) -> None:
-        if not _HAS_WEBENGINE or not url:
-            self._hide_link_warning()
+        if not _HAS_WEBENGINE:
+            return
+        if not url:
+            self._clear_link_hover()
             return
         self._hovered_link_url = url
+        self.link_hover_changed.emit(url)
         page = self._web.page()
         if page is None:
             return
@@ -139,12 +144,12 @@ class MessageViewer(QWidget):
         try:
             page.runJavaScript(script, self._apply_link_warning)
         except Exception:
-            self._hide_link_warning()
+            self._link_warning.hide()
 
     def _apply_link_warning(self, visible_text) -> None:
         url = self._hovered_link_url
         if not url:
-            self._hide_link_warning()
+            self._link_warning.hide()
             return
         text = visible_text if isinstance(visible_text, str) else ""
         if is_suspicious_link(text, url):
@@ -157,12 +162,12 @@ class MessageViewer(QWidget):
             )
             self._link_warning.setVisible(True)
         else:
-            self._hide_link_warning()
+            self._link_warning.hide()
 
     def _toggle_view_mode(self) -> None:
         if not self._stored_html and not self._stored_plain:
             return
-        self._hide_link_warning()
+        self._clear_link_hover()
         if self._view_mode == "html":
             self._view_mode = "reading"
             self._btn_view_mode.setText("📝 Texto plano")
@@ -201,7 +206,7 @@ class MessageViewer(QWidget):
         if not html.strip():
             self.show_plain("(Mensaje vacío)")
             return
-        self._hide_link_warning()
+        self._clear_link_hover()
         self._stored_html = html
         self._stored_base_url = base_url
         self._remote_blocked = remote_blocked
@@ -212,8 +217,9 @@ class MessageViewer(QWidget):
         self._render_current()
 
     def show_plain(self, text: str) -> None:
-        self._hide_link_warning()
+        self._clear_link_hover()
         self._stored_plain = text or ""
+        self._btn_load_images.setVisible(False)
         self._text.setPlainText(text or "(Mensaje vacío)")
         self._stack.setCurrentWidget(self._text)
 
@@ -224,7 +230,7 @@ class MessageViewer(QWidget):
     def clear(self) -> None:
         self._btn_load_images.setVisible(False)
         self._btn_view_mode.setVisible(False)
-        self._hide_link_warning()
+        self._clear_link_hover()
         self._stored_html = ""
         self._stored_plain = ""
         self._stored_base_url = ""

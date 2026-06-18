@@ -172,6 +172,8 @@ class FetchMessageWorker(QThread):
         *,
         mark_seen: bool = True,
         delete_after_download: bool = False,
+        load_remote_images: bool = False,
+        refresh_from_server: bool = False,
     ) -> None:
         super().__init__()
         self.service = service
@@ -181,6 +183,8 @@ class FetchMessageWorker(QThread):
         self.folder = folder
         self.mark_seen = mark_seen
         self.delete_after_download = delete_after_download
+        self.load_remote_images = load_remote_images
+        self.refresh_from_server = refresh_from_server
         self.signals = WorkerSignals()
 
     def _maybe_delete_from_server(self) -> None:
@@ -192,7 +196,14 @@ class FetchMessageWorker(QThread):
 
     def run(self) -> None:
         try:
-            if self.cache and self.account_id and self.folder:
+            use_cache = (
+                not self.refresh_from_server
+                and not self.load_remote_images
+                and self.cache
+                and self.account_id
+                and self.folder
+            )
+            if use_cache:
                 cached = self.cache.load_message_body(
                     self.account_id, self.folder, self.uid
                 )
@@ -211,7 +222,7 @@ class FetchMessageWorker(QThread):
             message = self.service.fetch_message(
                 self.uid,
                 folder=self.folder or None,
-                load_remote_images=False,
+                load_remote_images=self.load_remote_images,
                 mark_seen=self.mark_seen,
             )
             if self.cache and self.account_id and self.folder:
@@ -231,16 +242,25 @@ class FetchMessageWorker(QThread):
 class EnhanceHtmlWorker(QThread):
     """Descarga imágenes remotas para un mensaje ya mostrado en pantalla."""
 
-    def __init__(self, service: MailService, uid: str, html: str) -> None:
+    def __init__(
+        self,
+        service: MailService,
+        uid: str,
+        html: str,
+        folder: str = "",
+    ) -> None:
         super().__init__()
         self.service = service
         self.uid = uid
         self.html = html
+        self.folder = folder
         self.signals = WorkerSignals()
 
     def run(self) -> None:
         try:
-            enhanced = self.service.enhance_message_html(self.html)
+            enhanced = self.service.enhance_message_html(
+                self.html, uid=self.uid, folder=self.folder or None
+            )
             self.signals.finished.emit((self.uid, enhanced))
         except Exception as exc:
             self.signals.error.emit(str(exc))
@@ -427,6 +447,38 @@ class CreateFolderWorker(QThread):
             created = self.service.create_folder(self.name, self.parent)
             folders = [f.name for f in self.service.list_folders()]
             self.signals.finished.emit((created, folders))
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class DeleteFolderWorker(QThread):
+    """Elimina una carpeta IMAP (opcionalmente con subcarpetas)."""
+
+    def __init__(
+        self,
+        service: MailService,
+        folder: str,
+        cache: MailCache | None = None,
+        account_id: str = "",
+        *,
+        recursive: bool = False,
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.folder = folder
+        self.cache = cache
+        self.account_id = account_id
+        self.recursive = recursive
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            deleted = self.service.delete_folder(self.folder, recursive=self.recursive)
+            if self.cache and self.account_id:
+                for path in deleted:
+                    self.cache.clear_folder(self.account_id, path)
+            folders = [f.name for f in self.service.list_folders()]
+            self.signals.finished.emit((deleted, folders))
         except Exception as exc:
             self.signals.error.emit(str(exc))
 

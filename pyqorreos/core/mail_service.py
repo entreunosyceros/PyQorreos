@@ -813,10 +813,31 @@ class MailService:
                 break
         return payload, filename
 
-    def enhance_message_html(self, html: str) -> str:
-        """Descarga imágenes remotas en HTML ya procesado (cid resuelto)."""
+    def enhance_message_html(
+        self, html: str, *, uid: str | None = None, folder: str | None = None
+    ) -> str:
+        """Descarga imágenes remotas; si hay uid, reprocesa el MIME original."""
         from pyqorreos.core.email_html import embed_remote_images_in_html
 
+        if uid:
+            _flags, raw = self._fetch_raw_message(
+                uid, folder or self._current_folder, mark_seen=False
+            )
+            msg = email.message_from_bytes(raw)
+            _text, raw_html = _extract_body(msg)
+            sender = _decode_header_value(msg.get("From")) or ""
+            if raw_html.strip():
+                return prepare_html_for_display(
+                    msg,
+                    raw_html,
+                    sender=sender,
+                    load_remote_images=True,
+                )
+            from pyqorreos.core.email_html import _base_url_from_sender
+
+            return embed_remote_images_in_html(
+                html, referer=_base_url_from_sender(sender)
+            )
         return embed_remote_images_in_html(html)
 
     def send_message(
@@ -1000,6 +1021,66 @@ class MailService:
                 + (f": {detail}" if detail else "")
             )
         return full_path
+
+    def delete_folder(self, folder: str, *, recursive: bool = False) -> list[str]:
+        """
+        Elimina una carpeta IMAP y, si recursive, sus subcarpetas (de más profunda a raíz).
+
+        Vacía cada carpeta antes de borrarla. Devuelve las rutas eliminadas.
+        """
+        from pyqorreos.core.folder_utils import folder_descendants, is_protected_folder
+
+        path = folder.strip()
+        if not path:
+            raise ValueError("Indica una carpeta válida")
+        if is_protected_folder(path):
+            raise ValueError(f"La carpeta «{path}» es del sistema y no se puede eliminar")
+
+        all_names = [f.name for f in self.list_folders()]
+        descendants = folder_descendants(all_names, path)
+        if descendants and not recursive:
+            sample = ", ".join(descendants[:3])
+            extra = "…" if len(descendants) > 3 else ""
+            raise RuntimeError(
+                f"La carpeta tiene subcarpetas ({sample}{extra}). "
+                "Confirma la eliminación recursiva para borrarlas también."
+            )
+
+        targets = sorted({path, *descendants}, key=lambda p: (-p.count("/"), p))
+        deleted: list[str] = []
+
+        with self._imap_lock:
+            self._ensure_connected_unlocked()
+            imap = self._require_imap()
+            for target in targets:
+                if is_protected_folder(target):
+                    continue
+                self._select_on_imap(imap, target)
+                status, data = imap.uid("search", None, "ALL")
+                if status == "OK" and data and data[0]:
+                    for uid in data[0].split():
+                        imap.uid("store", uid, "+FLAGS", "(\\Deleted)")
+                    imap.expunge()
+                status, data = imap.delete(self._quoted_folder(target))
+                if status != "OK":
+                    detail = ""
+                    if data:
+                        raw = data[0] if isinstance(data, (list, tuple)) else data
+                        if isinstance(raw, bytes):
+                            detail = raw.decode("utf-8", errors="replace")
+                        elif raw:
+                            detail = str(raw)
+                    raise RuntimeError(
+                        f"No se pudo eliminar la carpeta «{target}»"
+                        + (f": {detail}" if detail else "")
+                    )
+                deleted.append(target)
+
+        if self._current_folder in deleted or any(
+            self._current_folder.startswith(d + "/") for d in deleted
+        ):
+            self._current_folder = "INBOX"
+        return deleted
 
     def empty_folder(self, folder: str) -> int:
         """Marca todos los mensajes de una carpeta como eliminados y expunge."""

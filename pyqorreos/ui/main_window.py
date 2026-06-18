@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QBrush, QColor, QFont
+from PySide6.QtGui import QAction, QBrush, QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -44,7 +44,13 @@ from PySide6.QtWidgets import (
 
 from pyqorreos.core.account import MailAccount
 from pyqorreos.core.classifier import MailCategory, extract_email_address
-from pyqorreos.core.folder_utils import find_drafts_folder, find_trash_folder, is_trash_folder
+from pyqorreos.core.folder_utils import (
+    can_delete_folder,
+    find_drafts_folder,
+    find_trash_folder,
+    folder_descendants,
+    is_trash_folder,
+)
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.mail_service import MailMessage, MailService, MailSummary, normalize_mail_datetime
 from pyqorreos.core.oauth import AuthMethod, detect_oauth_provider, oauth_not_configured_message
@@ -65,6 +71,7 @@ from pyqorreos.ui.system_tray import SystemTray
 from pyqorreos.ui.workers import (
     ConnectWorker,
     CreateFolderWorker,
+    DeleteFolderWorker,
     DeleteMessageWorker,
     DeleteMessagesWorker,
     EmptyFolderWorker,
@@ -226,6 +233,9 @@ class MainWindow(QMainWindow):
         self._pending_fetch_uid: str | None = None
         self._reader_buttons: list[QPushButton] = []
         self._enhance_worker: EnhanceHtmlWorker | None = None
+        self._pending_enhance_uid: str | None = None
+        self._enhance_generation = 0
+        self._explicit_image_load = False
         self._sync_new_total = 0
         self._account_combo_blocked = False
         self._prefs: UserPreferences = load_preferences()
@@ -416,7 +426,11 @@ class MainWindow(QMainWindow):
         self.message_table.itemSelectionChanged.connect(
             self._on_message_selection_changed
         )
-        self.message_table.currentCellChanged.connect(self._on_message_selected)
+        self.message_table.cellDoubleClicked.connect(self._on_message_double_clicked)
+        open_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Return), self.message_table)
+        open_shortcut.activated.connect(self._open_selected_message)
+        open_shortcut_enter = QShortcut(QKeySequence(Qt.Key.Key_Enter), self.message_table)
+        open_shortcut_enter.activated.connect(self._open_selected_message)
         self.message_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.message_table.customContextMenuRequested.connect(
             self._show_message_context_menu
@@ -495,6 +509,7 @@ class MainWindow(QMainWindow):
         self.message_viewer.load_remote_images_requested.connect(
             self._load_remote_images_for_current
         )
+        self.message_viewer.link_hover_changed.connect(self._on_viewer_link_hover)
         reader_layout.addWidget(self.message_viewer, 1)
         splitter.addWidget(reader_panel)
 
@@ -681,8 +696,65 @@ class MainWindow(QMainWindow):
             self._reader_buttons.append(btn)
         self._reader_row2.addStretch()
 
+    def _detach_enhance_worker(self) -> None:
+        """Ignora el resultado de una mejora HTML en curso (p. ej. al cambiar de mensaje)."""
+        self._pending_enhance_uid = None
+        if not self._enhance_worker:
+            return
+        try:
+            self._enhance_worker.signals.finished.disconnect(self._on_html_enhanced)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            self._enhance_worker.signals.error.disconnect(self._on_enhance_error)
+        except (RuntimeError, TypeError):
+            pass
+
     def _on_message_selection_changed(self) -> None:
+        selected = self._selected_message_uid()
+        if self._pending_fetch_uid and selected != self._pending_fetch_uid:
+            self._pending_fetch_uid = None
+            if self._message_fetch_worker and self._message_fetch_worker.isRunning():
+                try:
+                    self._message_fetch_worker.signals.finished.disconnect(
+                        self._display_message
+                    )
+                    self._message_fetch_worker.signals.error.disconnect(
+                        self._on_fetch_error
+                    )
+                except (RuntimeError, TypeError):
+                    pass
         self._update_message_actions()
+        self._show_selection_preview()
+
+    def _show_selection_preview(self) -> None:
+        """Muestra metadatos del listado sin descargar el cuerpo (doble clic para abrir)."""
+        uid = self._selected_message_uid()
+        if not uid:
+            return
+        if self._message_loaded_for_selection():
+            return
+
+        summary = next((m for m in self._all_messages if m.uid == uid), None)
+        if summary:
+            self.subject_label.setText(summary.subject)
+            date_str = (
+                summary.date.strftime("%d/%m/%Y %H:%M") if summary.date else ""
+            )
+            self.meta_label.setText(
+                f"De: {summary.sender}\n"
+                f"Categoría: {summary.category.icon} {summary.category.label}\n"
+                f"{date_str}"
+            )
+        else:
+            self.subject_label.setText("Mensaje seleccionado")
+            self.meta_label.setText("")
+
+        if self._current_message and self._current_message.uid != uid:
+            self._current_message = None
+
+        self.message_viewer.show_plain("Doble clic en el mensaje para abrirlo.")
+        self.attachment_panel.clear()
 
     def _update_message_actions(self) -> None:
         selected = self._selected_message_uids()
@@ -779,7 +851,15 @@ class MainWindow(QMainWindow):
             uid
             and self._current_message
             and self._current_message.uid == uid
+            and not self._message_body_is_empty(self._current_message)
         )
+
+    def _message_body_is_empty(self, message: MailMessage) -> bool:
+        html = (message.body_html or "").strip()
+        text = (message.body_text or "").strip()
+        if html:
+            return False
+        return not text or text in ("(Sin contenido)", "(Mensaje vacío)")
 
     def _show_message_context_menu(self, pos) -> None:
         """Menú contextual al clic derecho sobre un correo del listado."""
@@ -803,7 +883,7 @@ class MainWindow(QMainWindow):
         loaded = self._message_loaded_for_selection()
         open_action = menu.addAction("Abrir mensaje")
         open_action.setEnabled(not loaded)
-        open_action.triggered.connect(self._fetch_selected_message)
+        open_action.triggered.connect(self._open_selected_message)
 
         menu.addSeparator()
 
@@ -1277,6 +1357,11 @@ class MainWindow(QMainWindow):
         if is_trash_folder(folder):
             empty = menu.addAction("Vaciar papelera")
             empty.triggered.connect(lambda: self._empty_folder(folder))
+        if can_delete_folder(folder):
+            delete_folder = menu.addAction("Eliminar carpeta…")
+            delete_folder.triggered.connect(
+                lambda _checked=False, f=folder: self._delete_folder(f)
+            )
         refresh = menu.addAction("Actualizar carpeta")
         refresh.triggered.connect(self._refresh)
         export_mbox = menu.addAction("Exportar carpeta a .mbox…")
@@ -1308,6 +1393,79 @@ class MainWindow(QMainWindow):
             self._render_message_table()
         self._refresh_folder_unread_counts()
         self.status_bar.showMessage(f"Carpeta vaciada ({count} mensajes)")
+
+    def _delete_folder(self, folder: str) -> None:
+        if not self.mail_service or not self.current_account:
+            return
+        if not can_delete_folder(folder):
+            QMessageBox.warning(
+                self,
+                "Eliminar carpeta",
+                f"La carpeta «{folder}» es del sistema y no se puede eliminar.",
+            )
+            return
+
+        children = folder_descendants(self._folder_names, folder)
+        if children:
+            child_list = "\n".join(f"  • {name}" for name in children)
+            text = (
+                f"¿Eliminar la carpeta «{folder}» y sus subcarpetas?\n\n"
+                f"{child_list}\n\n"
+                "Los mensajes que contengan se eliminarán permanentemente del servidor."
+            )
+        else:
+            text = (
+                f"¿Eliminar la carpeta «{folder}»?\n\n"
+                "Los mensajes que contenga se eliminarán permanentemente del servidor."
+            )
+        reply = QMessageBox.question(
+            self,
+            "Eliminar carpeta",
+            text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.status_bar.showMessage(f"Eliminando carpeta «{folder}»…")
+        worker = DeleteFolderWorker(
+            self.mail_service,
+            folder,
+            self.mail_cache,
+            self.current_account.id,
+            recursive=bool(children),
+        )
+        worker.signals.finished.connect(self._on_folder_deleted)
+        worker.signals.error.connect(self._on_folder_delete_error)
+        worker.start()
+        self._workers.append(worker)
+
+    def _on_folder_deleted(self, payload) -> None:
+        deleted_paths, folders = payload
+        self._folder_names = folders
+        if self._current_folder in deleted_paths or any(
+            self._current_folder.startswith(path + "/") for path in deleted_paths
+        ):
+            self._current_folder = "INBOX"
+            self._all_messages = []
+            self._current_message = None
+            self._render_message_table()
+            self.message_viewer.clear()
+            self.subject_label.setText("Selecciona un mensaje")
+            self.meta_label.setText("")
+        self._refresh_folder_tree(select_folder=self._current_folder)
+        self._refresh_folder_unread_counts()
+        if len(deleted_paths) == 1:
+            self.status_bar.showMessage(f"Carpeta eliminada: {deleted_paths[0]}")
+        else:
+            self.status_bar.showMessage(
+                f"{len(deleted_paths)} carpetas eliminadas"
+            )
+
+    def _on_folder_delete_error(self, message: str) -> None:
+        self.status_bar.showMessage("Error al eliminar carpeta")
+        QMessageBox.warning(self, "Error al eliminar carpeta", message)
 
     def _on_background_new_mail(
         self, account_id: str, folder: str, summaries: list[MailSummary]
@@ -1407,6 +1565,9 @@ class MainWindow(QMainWindow):
         """Cancela descargas de mensaje pendientes (p. ej. al cambiar de carpeta)."""
         self._pending_fetch_uid = None
         self._message_fetch_worker = None
+        self._enhance_generation += 1
+        self._detach_enhance_worker()
+        self._explicit_image_load = False
 
     def _cancel_sync(self) -> None:
         if self._sync_worker and self._sync_worker.isRunning():
@@ -1688,7 +1849,8 @@ class MainWindow(QMainWindow):
             f"Pág. {self._current_page + 1}/{self._total_pages()} — "
             f"{len(filtered)} correos — "
             f"★ {counts[MailCategory.IMPORTANT]} importantes, "
-            f"⚠ {counts[MailCategory.SPAM]} spam"
+            f"⚠ {counts[MailCategory.SPAM]} spam — "
+            f"doble clic para abrir"
         )
 
     def _mark_selected_category(self, category: MailCategory) -> None:
@@ -1797,7 +1959,34 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Error al cargar el mensaje")
         QMessageBox.warning(self, "Error al abrir mensaje", message)
 
-    def _fetch_selected_message(self) -> None:
+    def _open_selected_message(self) -> None:
+        """Abre el mensaje seleccionado (doble clic, Enter o menú contextual)."""
+        row = self.message_table.currentRow()
+        if row < 0 or not hasattr(self, "_message_uids"):
+            return
+        self._on_message_double_clicked(row, 0)
+
+    def _on_message_double_clicked(self, row: int, _col: int) -> None:
+        if row < 0 or not self.mail_service or not hasattr(self, "_message_uids"):
+            return
+        if row >= len(self._message_uids):
+            return
+        uid = self._message_uids[row]
+        force = bool(
+            self._current_message
+            and self._current_message.uid == uid
+            and self._message_body_is_empty(self._current_message)
+        )
+        if (
+            not force
+            and self._current_message
+            and self._current_message.uid == uid
+            and not self._message_body_is_empty(self._current_message)
+        ):
+            return
+        self._fetch_selected_message(force=force)
+
+    def _fetch_selected_message(self, *, force: bool = False) -> None:
         """Descarga y muestra el mensaje de la fila seleccionada."""
         row = self.message_table.currentRow()
         if row < 0 or not self.mail_service or not hasattr(self, "_message_uids"):
@@ -1805,7 +1994,7 @@ class MainWindow(QMainWindow):
         if row >= len(self._message_uids):
             return
         uid = self._message_uids[row]
-        if self._message_loaded_for_selection():
+        if not force and self._message_loaded_for_selection():
             return
 
         self._pending_fetch_uid = uid
@@ -1829,17 +2018,13 @@ class MainWindow(QMainWindow):
             self.current_account.id if self.current_account else "",
             self._current_folder,
             delete_after_download=self._prefs.delete_from_server_after_download,
+            refresh_from_server=force,
         )
         worker.signals.finished.connect(self._display_message)
         worker.signals.error.connect(self._on_fetch_error)
         worker.start()
         self._message_fetch_worker = worker
         self._workers.append(worker)
-
-    def _on_message_selected(self, row: int, _col: int, _prev_row: int, _prev_col: int) -> None:
-        if row < 0 or not self.mail_service or not hasattr(self, "_message_uids"):
-            return
-        self._fetch_selected_message()
 
     def _prefetch_message(self, uid: str) -> None:
         """Precarga en caché el siguiente mensaje de la lista."""
@@ -1861,11 +2046,24 @@ class MainWindow(QMainWindow):
         worker.start()
         self._workers.append(worker)
 
+    def _on_viewer_link_hover(self, url: str) -> None:
+        if url:
+            if not hasattr(self, "_status_before_link_hover"):
+                self._status_before_link_hover = self.status_bar.currentMessage()
+            self.status_bar.showMessage(url)
+        elif hasattr(self, "_status_before_link_hover"):
+            self.status_bar.showMessage(self._status_before_link_hover)
+            del self._status_before_link_hover
+
     def _display_message(self, message: MailMessage) -> None:
         if getattr(self, "_pending_fetch_uid", None) != message.uid:
             return
         if message.uid not in getattr(self, "_message_uids", []):
             return
+
+        self._enhance_generation += 1
+        self._detach_enhance_worker()
+        self._explicit_image_load = False
 
         self._pending_fetch_uid = None
         self._current_message = message
@@ -1942,12 +2140,24 @@ class MainWindow(QMainWindow):
         """Descarga imágenes remotas en segundo plano sin bloquear la apertura."""
         if self._prefs.block_remote_images:
             return
-        if self._enhance_worker and self._enhance_worker.isRunning():
+        if (
+            self._enhance_worker
+            and self._enhance_worker.isRunning()
+            and self._pending_enhance_uid == message.uid
+        ):
             return
+        self._detach_enhance_worker()
+        generation = self._enhance_generation
+        self._pending_enhance_uid = message.uid
         worker = EnhanceHtmlWorker(
-            self.mail_service, message.uid, message.body_html
+            self.mail_service,
+            message.uid,
+            message.body_html,
+            self._current_folder,
         )
-        worker.signals.finished.connect(self._on_html_enhanced)
+        worker.signals.finished.connect(
+            lambda payload, g=generation: self._on_html_enhanced(payload, g)
+        )
         worker.start()
         self._enhance_worker = worker
         self._workers.append(worker)
@@ -1955,19 +2165,40 @@ class MainWindow(QMainWindow):
     def _load_remote_images_for_current(self) -> None:
         if not self._current_message or not self._current_message.body_html:
             return
-        if self._enhance_worker and self._enhance_worker.isRunning():
+        uid = self._current_message.uid
+        if (
+            self._enhance_worker
+            and self._enhance_worker.isRunning()
+            and self._pending_enhance_uid == uid
+        ):
+            self.status_bar.showMessage("Cargando imágenes remotas…")
             return
+        self._detach_enhance_worker()
+        self._explicit_image_load = True
+        generation = self._enhance_generation
+        self._pending_enhance_uid = uid
         self.status_bar.showMessage("Cargando imágenes remotas…")
         worker = EnhanceHtmlWorker(
-            self.mail_service, self._current_message.uid, self._current_message.body_html
+            self.mail_service,
+            uid,
+            self._current_message.body_html,
+            self._current_folder,
         )
-        worker.signals.finished.connect(self._on_html_enhanced)
-        worker.signals.error.connect(self._on_enhance_error)
+        worker.signals.finished.connect(
+            lambda payload, g=generation: self._on_html_enhanced(payload, g)
+        )
+        worker.signals.error.connect(
+            lambda message, g=generation: self._on_enhance_error(message, g)
+        )
         worker.start()
         self._enhance_worker = worker
         self._workers.append(worker)
 
-    def _on_enhance_error(self, message: str) -> None:
+    def _on_enhance_error(self, message: str, generation: int | None = None) -> None:
+        if generation is not None and generation != self._enhance_generation:
+            return
+        self._pending_enhance_uid = None
+        self._explicit_image_load = False
         self.status_bar.showMessage("No se pudieron cargar las imágenes remotas")
         QMessageBox.warning(self, "Imágenes remotas", message)
 
@@ -2147,14 +2378,37 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Error al mover mensajes")
         QMessageBox.warning(self, "Error al mover", message)
 
-    def _on_html_enhanced(self, payload) -> None:
+    def _on_html_enhanced(self, payload, generation: int | None = None) -> None:
         uid, html = payload
+        if generation is not None and generation != self._enhance_generation:
+            return
+        if self._pending_enhance_uid != uid:
+            return
         if not self._current_message or self._current_message.uid != uid:
             return
-        if html == self._current_message.body_html:
-            self.status_bar.showMessage("No hay imágenes remotas pendientes de cargar")
+        self._pending_enhance_uid = None
+        explicit = self._explicit_image_load
+        self._explicit_image_load = False
+        from pyqorreos.core.email_html import (
+            BLOCKED_IMAGE_PLACEHOLDER_MARKER,
+            base_url_for_message,
+        )
+
+        if html == self._current_message.body_html and not explicit:
+            if BLOCKED_IMAGE_PLACEHOLDER_MARKER in html:
+                self.status_bar.showMessage(
+                    "No se pudieron descargar algunas imágenes remotas"
+                )
+            else:
+                self.status_bar.showMessage(
+                    "No hay imágenes remotas pendientes de cargar"
+                )
             return
-        from pyqorreos.core.email_html import base_url_for_message
+        if html == self._current_message.body_html and BLOCKED_IMAGE_PLACEHOLDER_MARKER in html:
+            self.status_bar.showMessage(
+                "No se pudieron descargar algunas imágenes remotas"
+            )
+            return
 
         self._current_message = MailMessage(
             uid=self._current_message.uid,
