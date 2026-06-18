@@ -1,3 +1,5 @@
+<img width="1408" height="768" alt="PyQorreos" src="https://github.com/user-attachments/assets/19640ae3-ae11-419d-b033-9e1ee7fbcfc2" />
+
 # PyQorreos
 
 Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**. PyQorreos nace porque quería un cliente de correo sencillo, rápido y completamente en Python. No pretende competir con Thunderbird ni Evolution, sino ofrecer una alternativa ligera, fácil de modificar y orientada al aprendizaje y al uso diario.
