@@ -234,9 +234,13 @@ def prepare_html_for_display(
     else:
         html = block_remote_images_in_html(html)
     html = _inject_base_styles(html)
-    from pyqorreos.ui.webengine_setup import sanitize_email_html_for_viewer
+    from pyqorreos.ui.webengine_setup import (
+        inject_link_safety_overlay,
+        sanitize_email_html_for_viewer,
+    )
 
-    return sanitize_email_html_for_viewer(html)
+    html = sanitize_email_html_for_viewer(html)
+    return inject_link_safety_overlay(html)
 
 
 def embed_remote_images_in_html(html: str) -> str:
@@ -246,3 +250,64 @@ def embed_remote_images_in_html(html: str) -> str:
 
 def base_url_for_message(sender: str) -> str:
     return _base_url_from_sender(sender)
+
+
+_READING_MODE_STYLES = """
+body {
+    max-width: 42rem !important;
+    margin: 0 auto !important;
+    padding: 1rem 1.25rem !important;
+    font: 1.05rem/1.65 Georgia, "Times New Roman", serif !important;
+    color: #1a1a1a !important;
+    background: #fafafa !important;
+}
+img, video, iframe { display: none !important; }
+table { width: 100% !important; border-collapse: collapse !important; }
+td, th { padding: 0.25rem 0 !important; }
+a { color: #1a5fb4 !important; text-decoration: underline !important; }
+blockquote {
+    border-left: 3px solid #ccc !important;
+    margin-left: 0 !important;
+    padding-left: 1rem !important;
+    color: #444 !important;
+}
+"""
+
+
+def apply_reading_mode_styles(html: str) -> str:
+    """Aplica estilos mínimos de lectura sobre el HTML del mensaje."""
+    if not html.strip():
+        return html
+    style_block = f"<style>{_READING_MODE_STYLES}</style>"
+    if _HAS_HEAD_CLOSE.search(html):
+        return _HAS_HEAD_CLOSE.sub(f"{style_block}</head>", html, count=1)
+    if _HAS_HTML_TAG.search(html):
+        return _HAS_HTML_TAG.sub(
+            rf"<html\1><head><meta charset='utf-8'>{style_block}</head>",
+            html,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"{style_block}</head><body>{html}</body></html>"
+    )
+
+
+def html_to_plain_text(html: str) -> str:
+    """Extrae texto legible del HTML sin dependencias externas."""
+    from html import unescape
+
+    if not html.strip():
+        return ""
+    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", html)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p\s*>", "\n\n", text)
+    text = re.sub(r"(?i)</div\s*>", "\n", text)
+    text = re.sub(r"(?i)</tr\s*>", "\n", text)
+    text = re.sub(r"(?i)<li[^>]*>", "• ", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = unescape(text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()

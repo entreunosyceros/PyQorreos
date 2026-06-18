@@ -9,6 +9,7 @@ from __future__ import annotations
 import html as html_module
 
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -24,8 +25,10 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.core.compose_email import EmailAttachment, build_draft_bytes, prepare_outgoing_html
+from pyqorreos.core.compose_utils import body_mentions_attachment
 from pyqorreos.core.mail_service import MailService
 from pyqorreos.core.reply_utils import ComposeDraft
+from pyqorreos.core.user_preferences import DEFAULT_COMPOSE_SNIPPETS
 from pyqorreos.ui.rich_compose_editor import RichComposeEditor
 from pyqorreos.ui.workers import SaveDraftWorker, SendMailWorker
 
@@ -97,12 +100,14 @@ class ComposeDialog(QDialog):
         title: str = "Redactar correo",
         signature: str = "",
         drafts_folder: str | None = None,
+        snippets: list[dict[str, str]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.service = service
         self.draft = draft or ComposeDraft()
         self._signature = signature.strip()
         self._drafts_folder = drafts_folder
+        self._snippets = snippets or list(DEFAULT_COMPOSE_SNIPPETS)
         self._attachments: list[EmailAttachment] = []
         self.setWindowTitle(title)
         self.setMinimumSize(720, 560)
@@ -128,6 +133,16 @@ class ComposeDialog(QDialog):
         form.addRow("Asunto:", self.subject_edit)
 
         layout.addLayout(form)
+
+        snippet_row = QHBoxLayout()
+        snippet_row.addWidget(QLabel("Plantilla:"))
+        self.snippet_combo = QComboBox()
+        self.snippet_combo.addItem("— Insertar plantilla —", None)
+        for snippet in self._snippets:
+            self.snippet_combo.addItem(snippet.get("name", "Plantilla"))
+        self.snippet_combo.activated.connect(self._insert_snippet)
+        snippet_row.addWidget(self.snippet_combo, 1)
+        layout.addLayout(snippet_row)
 
         layout.addWidget(QLabel("Mensaje:"))
         self.body_editor = RichComposeEditor()
@@ -185,6 +200,17 @@ class ComposeDialog(QDialog):
                 1,
             )
         return html + sig_html
+
+    def _insert_snippet(self, index: int) -> None:
+        if index <= 0 or index > len(self._snippets):
+            return
+        text = self._snippets[index - 1].get("text", "")
+        if not text:
+            return
+        self.body_editor.insert_text(text)
+        self.snippet_combo.blockSignals(True)
+        self.snippet_combo.setCurrentIndex(0)
+        self.snippet_combo.blockSignals(False)
 
     def _load_draft(self) -> None:
         self.to_edit.setText(self.draft.to)
@@ -261,6 +287,18 @@ class ComposeDialog(QDialog):
         if not plain and not self._attachments:
             QMessageBox.warning(self, "Error", "Escribe un mensaje o adjunta un archivo.")
             return
+
+        if not self._attachments and body_mentions_attachment(plain):
+            reply = QMessageBox.warning(
+                self,
+                "¿Adjunto olvidado?",
+                "El mensaje menciona un adjunto, pero no has añadido ningún archivo.\n\n"
+                "¿Enviar de todos modos?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
 
         self.setEnabled(False)
         self.worker = SendMailWorker(

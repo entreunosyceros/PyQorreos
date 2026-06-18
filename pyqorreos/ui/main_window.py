@@ -20,8 +20,10 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -41,8 +43,8 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.core.account import MailAccount
-from pyqorreos.core.classifier import MailCategory
-from pyqorreos.core.folder_utils import find_drafts_folder, is_trash_folder
+from pyqorreos.core.classifier import MailCategory, extract_email_address
+from pyqorreos.core.folder_utils import find_drafts_folder, find_trash_folder, is_trash_folder
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.mail_service import MailMessage, MailService, MailSummary, normalize_mail_datetime
 from pyqorreos.core.oauth import AuthMethod, detect_oauth_provider, oauth_not_configured_message
@@ -62,17 +64,22 @@ from pyqorreos.ui.preferences_dialog import PreferencesDialog
 from pyqorreos.ui.system_tray import SystemTray
 from pyqorreos.ui.workers import (
     ConnectWorker,
+    CreateFolderWorker,
     DeleteMessageWorker,
     DeleteMessagesWorker,
     EmptyFolderWorker,
     EnhanceHtmlWorker,
+    ExportFolderWorker,
+    ExportMessageWorker,
     FetchAttachmentWorker,
     FetchMessageWorker,
     FolderUnreadWorker,
     MoveMessagesWorker,
     SaveDraftWorker,
     SetSeenWorker,
+    StorageQuotaWorker,
     SyncFolderWorker,
+    UnsubscribeWorker,
 )
 
 
@@ -262,6 +269,21 @@ class MainWindow(QMainWindow):
         folder_label = QLabel("Carpetas")
         folder_label.setFont(_font_bold(folder_label.font(), 11))
         folder_layout.addWidget(folder_label)
+
+        folder_btn_row = QHBoxLayout()
+        self.btn_new_folder = QPushButton("＋ Carpeta")
+        self.btn_new_folder.setToolTip("Crear una carpeta nueva en el servidor")
+        self.btn_new_folder.clicked.connect(lambda: self._create_folder())
+        self.btn_new_subfolder = QPushButton("＋ Subcarpeta")
+        self.btn_new_subfolder.setToolTip(
+            "Crear una subcarpeta dentro de la carpeta seleccionada"
+        )
+        self.btn_new_subfolder.clicked.connect(self._create_subfolder)
+        folder_btn_row.addWidget(self.btn_new_folder)
+        folder_btn_row.addWidget(self.btn_new_subfolder)
+        folder_btn_row.addStretch()
+        folder_layout.addLayout(folder_btn_row)
+
         self.folder_tree = QTreeWidget()
         self.folder_tree.setHeaderHidden(True)
         self.folder_tree.setStyleSheet(
@@ -290,6 +312,19 @@ class MainWindow(QMainWindow):
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(self._show_folder_context_menu)
         folder_layout.addWidget(self.folder_tree)
+
+        self.quota_bar = QProgressBar()
+        self.quota_bar.setMaximum(100)
+        self.quota_bar.setTextVisible(False)
+        self.quota_bar.setMaximumHeight(8)
+        self.quota_bar.setVisible(False)
+        folder_layout.addWidget(self.quota_bar)
+        self.quota_label = QLabel("")
+        self.quota_label.setStyleSheet("color: #666; font-size: 9pt;")
+        self.quota_label.setWordWrap(True)
+        self.quota_label.setVisible(False)
+        folder_layout.addWidget(self.quota_label)
+
         splitter.addWidget(folder_panel)
 
         # Panel central: lista de mensajes
@@ -396,8 +431,13 @@ class MainWindow(QMainWindow):
         )
         self.btn_delete_selected.clicked.connect(self._act_delete.trigger)
         self.btn_delete_selected.setEnabled(False)
-        self._list_action_buttons = [self.btn_delete_selected]
+        self.btn_move_selected = QPushButton("📁 Mover a…")
+        self.btn_move_selected.setToolTip("Mover los mensajes seleccionados a otra carpeta")
+        self.btn_move_selected.clicked.connect(self._show_move_messages_dialog)
+        self.btn_move_selected.setEnabled(False)
+        self._list_action_buttons = [self.btn_delete_selected, self.btn_move_selected]
         pagination_row.addWidget(self.btn_delete_selected)
+        pagination_row.addWidget(self.btn_move_selected)
         pagination_row.addSpacing(12)
         self.btn_prev_page = QPushButton("◀ Anterior")
         self.btn_prev_page.clicked.connect(self._prev_page)
@@ -520,6 +560,16 @@ class MainWindow(QMainWindow):
         self._act_delete.setToolTip("Eliminar los mensajes seleccionados (Supr)")
         self._act_delete.triggered.connect(self._delete_message)
 
+        self._act_move_messages = QAction("Mover a otra carpeta…", self)
+        self._act_move_messages.setShortcut("Ctrl+Shift+M")
+        self._act_move_messages.triggered.connect(self._show_move_messages_dialog)
+
+        self._act_new_folder = QAction("Nueva carpeta…", self)
+        self._act_new_folder.triggered.connect(lambda: self._create_folder())
+
+        self._act_new_subfolder = QAction("Nueva subcarpeta…", self)
+        self._act_new_subfolder.triggered.connect(self._create_subfolder)
+
         self._act_mark_important = QAction("Marcar como importante", self)
         self._act_mark_important.triggered.connect(
             lambda: self._mark_selected_category(MailCategory.IMPORTANT)
@@ -542,14 +592,25 @@ class MainWindow(QMainWindow):
         self._act_preferences.setShortcut("Ctrl+,")
         self._act_preferences.triggered.connect(self._show_preferences)
 
+        self._act_unsubscribe = QAction("Darse de baja del boletín", self)
+        self._act_unsubscribe.triggered.connect(self._unsubscribe_current_message)
+
+        self._act_export_eml = QAction("Exportar como .eml…", self)
+        self._act_export_eml.triggered.connect(self._export_selected_eml)
+
+        self._act_export_folder = QAction("Exportar carpeta a .mbox…", self)
+        self._act_export_folder.triggered.connect(self._export_current_folder_mbox)
+
         for action in (
             self._act_reply,
             self._act_reply_all,
             self._act_forward,
             self._act_delete,
+            self._act_move_messages,
             self._act_mark_important,
             self._act_mark_spam,
             self._act_mark_normal,
+            self._act_unsubscribe,
         ):
             action.setEnabled(False)
 
@@ -605,6 +666,7 @@ class MainWindow(QMainWindow):
             (self._act_mark_important, "★ Importante", _READER_BTN_CATEGORY),
             (self._act_mark_spam, "⚠ Spam", _READER_BTN_CATEGORY),
             (self._act_mark_normal, "● Normal", _READER_BTN_CATEGORY),
+            (self._act_unsubscribe, "✉ Dar de baja", _READER_BTN_SECONDARY),
         )
 
         for action, label, style in row1_specs:
@@ -648,6 +710,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(has_row and loaded)
         for action in (
             self._act_delete,
+            self._act_move_messages,
             self._act_mark_important,
             self._act_mark_spam,
             self._act_mark_normal,
@@ -660,6 +723,15 @@ class MainWindow(QMainWindow):
         for index, btn in enumerate(self._reader_buttons):
             if index <= 2:
                 btn.setEnabled(has_row and loaded)
+            elif btn.text().startswith("✉"):
+                msg = self._current_message
+                can_unsub = bool(
+                    loaded
+                    and msg
+                    and (msg.unsubscribe_url or msg.unsubscribe_mailto)
+                )
+                btn.setEnabled(can_unsub)
+                self._act_unsubscribe.setEnabled(can_unsub)
             else:
                 btn.setEnabled(has_row)
 
@@ -747,6 +819,12 @@ class MainWindow(QMainWindow):
         delete_action.setShortcut(self._act_delete.shortcut())
         delete_action.triggered.connect(self._act_delete.trigger)
 
+        if loaded and self._current_message and (
+            self._current_message.unsubscribe_url or self._current_message.unsubscribe_mailto
+        ):
+            unsub_action = menu.addAction("Darse de baja del boletín")
+            unsub_action.triggered.connect(self._unsubscribe_current_message)
+
         menu.addSeparator()
         category_menu = menu.addMenu("Marcar como")
         for action in (
@@ -772,7 +850,13 @@ class MainWindow(QMainWindow):
         copy_sender = menu.addAction("Copiar dirección del remitente")
         copy_sender.triggered.connect(self._copy_sender_address)
 
+        export_eml = menu.addAction("Exportar como .eml…")
+        export_eml.triggered.connect(self._export_selected_eml)
+
         move_menu = menu.addMenu("Mover a…")
+        move_menu.addAction("Elegir carpeta…").triggered.connect(
+            self._show_move_messages_dialog
+        )
         for folder_name in self._folder_names:
             if folder_name == self._current_folder:
                 continue
@@ -898,6 +982,12 @@ class MainWindow(QMainWindow):
         cuenta_menu.addAction(self._act_preferences)
         cuenta_menu.addAction(self._act_refresh)
 
+        folders_menu = self.menuBar().addMenu("Carpetas")
+        folders_menu.addAction(self._act_new_folder)
+        folders_menu.addAction(self._act_new_subfolder)
+        folders_menu.addSeparator()
+        folders_menu.addAction(self._act_move_messages)
+
         correo_menu = self.menuBar().addMenu("Correo")
         correo_menu.addAction(self._act_compose)
         correo_menu.addAction(self._act_reply)
@@ -905,10 +995,15 @@ class MainWindow(QMainWindow):
         correo_menu.addAction(self._act_forward)
         correo_menu.addSeparator()
         correo_menu.addAction(self._act_delete)
+        correo_menu.addAction(self._act_move_messages)
         correo_menu.addSeparator()
         correo_menu.addAction(self._act_mark_important)
         correo_menu.addAction(self._act_mark_spam)
         correo_menu.addAction(self._act_mark_normal)
+
+        tools_menu = self.menuBar().addMenu("Herramientas")
+        tools_menu.addAction(self._act_export_eml)
+        tools_menu.addAction(self._act_export_folder)
 
         ayuda_menu = self.menuBar().addMenu("Ayuda")
         ayuda_menu.addAction(self._act_preferences)
@@ -1119,6 +1214,7 @@ class MainWindow(QMainWindow):
         self._folder_names = [f.name for f in folders]
         self._refresh_folder_tree(select_folder="INBOX")
         self._refresh_folder_unread_counts()
+        self._refresh_storage_quota()
 
         folder = selected_folder_path(self.folder_tree) or "INBOX"
         self._start_folder_sync(folder)
@@ -1158,11 +1254,33 @@ class MainWindow(QMainWindow):
         if not folder or not self.mail_service:
             return
         menu = QMenu(self)
+
+        uids = self._selected_message_uids()
+        if uids and folder != self._current_folder:
+            label = (
+                f"Mover {len(uids)} mensaje(s) aquí"
+                if len(uids) > 1
+                else "Mover mensaje aquí"
+            )
+            move_here = menu.addAction(label)
+            move_here.triggered.connect(
+                lambda _checked=False, f=folder: self._move_selected_messages(f)
+            )
+            menu.addSeparator()
+
+        new_sub = menu.addAction("Nueva subcarpeta…")
+        new_sub.triggered.connect(
+            lambda _checked=False, parent=folder: self._create_folder(parent)
+        )
+        menu.addSeparator()
+
         if is_trash_folder(folder):
             empty = menu.addAction("Vaciar papelera")
             empty.triggered.connect(lambda: self._empty_folder(folder))
         refresh = menu.addAction("Actualizar carpeta")
         refresh.triggered.connect(self._refresh)
+        export_mbox = menu.addAction("Exportar carpeta a .mbox…")
+        export_mbox.triggered.connect(self._export_current_folder_mbox)
         menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
 
     def _empty_folder(self, folder: str) -> None:
@@ -1584,9 +1702,37 @@ class MainWindow(QMainWindow):
         if not summary:
             return
 
-        self.settings.learn_sender_category(summary.sender, category.value)
+        create_rule = False
+        if category in (MailCategory.SPAM, MailCategory.IMPORTANT):
+            sender_email = extract_email_address(summary.sender)
+            rules = self.settings.load_classification_rules()
+            already = (
+                sender_email in rules.spam_senders
+                if category == MailCategory.SPAM
+                else sender_email in rules.important_senders
+            )
+            if sender_email and not already:
+                reply = QMessageBox.question(
+                    self,
+                    "Crear regla de remitente",
+                    f"¿Crear regla para clasificar siempre los correos de\n"
+                    f"{summary.sender}\ncomo «{category.label}»?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                create_rule = reply == QMessageBox.StandardButton.Yes
+            else:
+                create_rule = True
+        elif category == MailCategory.NORMAL:
+            create_rule = True
+
+        if create_rule:
+            self.settings.learn_sender_category(summary.sender, category.value)
+            if self.mail_service:
+                self.mail_service.update_classifier(self.settings.get_classifier())
+            self._reclassify_by_sender(summary.sender)
+
         if self.mail_service:
-            self.mail_service.update_classifier(self.settings.get_classifier())
             if category == MailCategory.IMPORTANT:
                 self.mail_service.set_flagged(uid, True)
             elif category == MailCategory.NORMAL:
@@ -1601,9 +1747,44 @@ class MainWindow(QMainWindow):
                 category,
             )
         self._render_message_table()
+        if create_rule:
+            detail = f" — regla guardada para {summary.sender}"
+        else:
+            detail = ""
         self.status_bar.showMessage(
-            f"Remitente clasificado como {category.label}"
+            f"Clasificado como {category.label}{detail}"
         )
+
+    def _reclassify_by_sender(self, sender: str) -> None:
+        """Reclasifica en la carpeta actual los mensajes del mismo remitente."""
+        if not self.mail_service:
+            return
+        classifier = self.settings.get_classifier()
+        target = extract_email_address(sender)
+        if not target:
+            return
+        changed = False
+        for summary in self._all_messages:
+            if extract_email_address(summary.sender) != target:
+                continue
+            new_cat = classifier.classify(
+                folder=self._current_folder,
+                subject=summary.subject,
+                sender=summary.sender,
+                flagged=summary.flagged,
+            )
+            if new_cat != summary.category:
+                summary.category = new_cat
+                changed = True
+                if self.current_account:
+                    self.mail_cache.update_category(
+                        self.current_account.id,
+                        self._current_folder,
+                        summary.uid,
+                        new_cat,
+                    )
+        if changed:
+            self._render_message_table()
 
     def _on_fetch_error(self, message: str) -> None:
         if self._pending_fetch_uid is None:
@@ -1729,6 +1910,10 @@ class MainWindow(QMainWindow):
         )
 
         self.attachment_panel.set_attachments(message.attachments)
+        from pyqorreos.core.email_html import html_to_plain_text
+
+        plain = message.body_text or html_to_plain_text(message.body_html)
+        self.message_viewer.set_plain_fallback(plain)
 
         if message.body_html:
             from pyqorreos.core.email_html import base_url_for_message
@@ -1836,6 +2021,98 @@ class MainWindow(QMainWindow):
         except OSError:
             QMessageBox.information(self, "Adjunto", f"Guardado en: {tmp_path}")
 
+    def _create_subfolder(self) -> None:
+        parent = selected_folder_path(self.folder_tree)
+        if not parent:
+            QMessageBox.information(
+                self,
+                "Sin carpeta",
+                "Selecciona la carpeta padre en el árbol antes de crear una subcarpeta.",
+            )
+            return
+        self._create_folder(parent)
+
+    def _create_folder(self, parent: str | None = None) -> None:
+        if not self.mail_service:
+            QMessageBox.information(
+                self,
+                "Sin conexión",
+                "Conecta una cuenta antes de crear carpetas.",
+            )
+            return
+        title = "Nueva subcarpeta" if parent else "Nueva carpeta"
+        prompt = (
+            f"Nombre de la subcarpeta dentro de «{parent}»:"
+            if parent
+            else "Nombre de la carpeta:"
+        )
+        name, ok = QInputDialog.getText(self, title, prompt)
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, title, "Indica un nombre para la carpeta.")
+            return
+        self.status_bar.showMessage(f"Creando carpeta «{name}»…")
+        worker = CreateFolderWorker(self.mail_service, name, parent)
+        worker.signals.finished.connect(self._on_folder_created)
+        worker.signals.error.connect(self._on_folder_create_error)
+        worker.start()
+        self._workers.append(worker)
+
+    def _on_folder_created(self, payload) -> None:
+        created_path, folders = payload
+        self._folder_names = folders
+        self._refresh_folder_tree(select_folder=created_path)
+        self._refresh_folder_unread_counts()
+        self.status_bar.showMessage(f"Carpeta creada: {created_path}")
+
+    def _on_folder_create_error(self, message: str) -> None:
+        self.status_bar.showMessage("Error al crear carpeta")
+        QMessageBox.warning(self, "Error al crear carpeta", message)
+
+    def _show_move_messages_dialog(self) -> None:
+        uids = self._selected_message_uids()
+        if not uids:
+            QMessageBox.information(
+                self,
+                "Mover mensajes",
+                "Selecciona uno o más mensajes en la lista.",
+            )
+            return
+        if not self.mail_service or not self.current_account:
+            return
+        dest = self._pick_destination_folder()
+        if dest:
+            self._move_selected_messages(dest)
+
+    def _pick_destination_folder(self) -> str | None:
+        options = sorted(
+            f for f in self._folder_names if f != self._current_folder
+        )
+        if not options:
+            QMessageBox.information(
+                self,
+                "Mover mensajes",
+                "No hay otras carpetas disponibles.",
+            )
+            return None
+        uids = self._selected_message_uids()
+        label = (
+            f"Mover {len(uids)} mensaje(s) a:"
+            if len(uids) != 1
+            else "Mover mensaje a:"
+        )
+        dest, ok = QInputDialog.getItem(
+            self,
+            "Mover a carpeta",
+            label,
+            options,
+            0,
+            False,
+        )
+        return dest if ok and dest else None
+
     def _move_selected_messages(self, dest_folder: str) -> None:
         uids = self._selected_message_uids()
         if not uids or not self.mail_service or not self.current_account:
@@ -1849,7 +2126,7 @@ class MainWindow(QMainWindow):
             self._current_folder,
         )
         worker.signals.finished.connect(self._on_messages_moved)
-        worker.signals.error.connect(self._on_fetch_error)
+        worker.signals.error.connect(self._on_move_error)
         worker.start()
         self._workers.append(worker)
 
@@ -1865,6 +2142,10 @@ class MainWindow(QMainWindow):
         self.attachment_panel.clear()
         self._render_message_table()
         self.status_bar.showMessage(f"{len(uids)} mensaje(s) movidos a {dest}")
+
+    def _on_move_error(self, message: str) -> None:
+        self.status_bar.showMessage("Error al mover mensajes")
+        QMessageBox.warning(self, "Error al mover", message)
 
     def _on_html_enhanced(self, payload) -> None:
         uid, html = payload
@@ -1888,6 +2169,9 @@ class MainWindow(QMainWindow):
             message_id=self._current_message.message_id,
             in_reply_to=self._current_message.in_reply_to,
             references=self._current_message.references,
+            unsubscribe_url=self._current_message.unsubscribe_url,
+            unsubscribe_mailto=self._current_message.unsubscribe_mailto,
+            one_click_unsubscribe=self._current_message.one_click_unsubscribe,
         )
         if self.current_account:
             self.mail_cache.save_message_body(
@@ -1937,6 +2221,183 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(addr)
         self.status_bar.showMessage(f"Dirección copiada: {addr}")
 
+    @staticmethod
+    def _format_bytes(size: int) -> str:
+        if size < 1024:
+            return f"{size} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.1f} KB"
+        if size < 1024 * 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MB"
+        return f"{size / (1024 * 1024 * 1024):.2f} GB"
+
+    def _refresh_storage_quota(self) -> None:
+        if not self.mail_service:
+            self.quota_bar.setVisible(False)
+            self.quota_label.setVisible(False)
+            return
+        worker = StorageQuotaWorker(self.mail_service)
+        worker.signals.finished.connect(self._on_storage_quota)
+        worker.signals.error.connect(lambda _m: self._hide_storage_quota())
+        worker.start()
+        self._workers.append(worker)
+
+    def _hide_storage_quota(self) -> None:
+        self.quota_bar.setVisible(False)
+        self.quota_label.setVisible(False)
+
+    def _on_storage_quota(self, quota) -> None:
+        if not quota:
+            self._hide_storage_quota()
+            return
+        used, limit = quota
+        if limit <= 0:
+            self._hide_storage_quota()
+            return
+        percent = min(100, max(0, int(used * 100 / limit)))
+        self.quota_bar.setValue(percent)
+        self.quota_bar.setVisible(True)
+        self.quota_label.setText(
+            f"Espacio: {self._format_bytes(used)} de {self._format_bytes(limit)}"
+        )
+        self.quota_label.setVisible(True)
+
+    def _unsubscribe_current_message(self) -> None:
+        if not self._message_loaded_for_selection() or not self._current_message:
+            return
+        if not self.mail_service or not self.current_account:
+            return
+        msg = self._current_message
+        trash = find_trash_folder(self._folder_names)
+        if not trash:
+            QMessageBox.warning(
+                self,
+                "Sin papelera",
+                "No se encontró carpeta de papelera en el servidor.",
+            )
+            return
+        reply = QMessageBox.question(
+            self,
+            "Darse de baja",
+            "Se enviará la solicitud de baja al remitente y el mensaje "
+            f"se moverá a «{trash}».\n\n¿Continuar?",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.status_bar.showMessage("Procesando baja del boletín…")
+        worker = UnsubscribeWorker(
+            self.mail_service,
+            msg.uid,
+            self._current_folder,
+            trash,
+            url=msg.unsubscribe_url,
+            mailto=msg.unsubscribe_mailto,
+            one_click=msg.one_click_unsubscribe,
+            cache=self.mail_cache,
+            account_id=self.current_account.id,
+        )
+        worker.signals.finished.connect(self._on_unsubscribed)
+        worker.signals.error.connect(
+            lambda m: QMessageBox.warning(self, "Error de baja", m)
+        )
+        worker.start()
+        self._workers.append(worker)
+
+    def _on_unsubscribed(self, message: str) -> None:
+        if self._current_message:
+            uid = self._current_message.uid
+            self._all_messages = [m for m in self._all_messages if m.uid != uid]
+            self._current_message = None
+            self._render_message_table()
+            self.subject_label.setText("Selecciona un mensaje")
+            self.meta_label.setText("")
+            self.message_viewer.clear()
+            self.attachment_panel.clear()
+        self.status_bar.showMessage(message)
+        QMessageBox.information(self, "Baja realizada", message)
+
+    def _export_selected_eml(self) -> None:
+        uid = self._selected_message_uid()
+        if not uid or not self.mail_service:
+            QMessageBox.information(self, "Exportar", "Selecciona un mensaje.")
+            return
+        default_name = f"mensaje_{uid}.eml"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exportar correo",
+            default_name,
+            "Correo electrónico (*.eml)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".eml"):
+            path += ".eml"
+        self.status_bar.showMessage("Exportando mensaje…")
+        worker = ExportMessageWorker(
+            self.mail_service, uid, self._current_folder, path
+        )
+        worker.signals.finished.connect(
+            lambda p: self.status_bar.showMessage(f"Exportado: {p}")
+        )
+        worker.signals.error.connect(
+            lambda m: QMessageBox.warning(self, "Error al exportar", m)
+        )
+        worker.start()
+        self._workers.append(worker)
+
+    def _export_current_folder_mbox(self) -> None:
+        if not self.mail_service or not self.current_account:
+            QMessageBox.information(self, "Exportar", "Conecta una cuenta primero.")
+            return
+        uids = [m.uid for m in self._all_messages]
+        if not uids:
+            QMessageBox.information(self, "Exportar", "No hay mensajes en esta carpeta.")
+            return
+        safe_folder = self._current_folder.replace("/", "_")
+        default_name = f"{safe_folder}.mbox"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Exportar carpeta",
+            default_name,
+            "Mailbox (*.mbox)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".mbox"):
+            path += ".mbox"
+        reply = QMessageBox.question(
+            self,
+            "Exportar carpeta",
+            f"Se exportarán {len(uids)} mensajes de «{self._current_folder}».\n"
+            "Puede tardar varios minutos.\n\n¿Continuar?",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.status_bar.showMessage(f"Exportando {len(uids)} mensajes…")
+        worker = ExportFolderWorker(
+            self.mail_service,
+            self.current_account.id,
+            self._current_folder,
+            uids,
+            path,
+            self.mail_cache,
+        )
+        worker.signals.finished.connect(self._on_folder_exported)
+        worker.signals.error.connect(
+            lambda m: QMessageBox.warning(self, "Error al exportar", m)
+        )
+        worker.start()
+        self._workers.append(worker)
+
+    def _on_folder_exported(self, payload) -> None:
+        path, count = payload
+        self.status_bar.showMessage(f"Exportados {count} mensajes a {path}")
+        QMessageBox.information(
+            self,
+            "Exportación completa",
+            f"Se guardaron {count} mensajes en:\n{path}",
+        )
+
     def _refresh(self) -> None:
         folder = selected_folder_path(self.folder_tree)
         if folder and self.mail_service:
@@ -1957,6 +2418,7 @@ class MainWindow(QMainWindow):
             title=title,
             signature=self.current_account.signature if self.current_account else "",
             drafts_folder=find_drafts_folder(self._folder_names),
+            snippets=self._prefs.compose_snippets,
         )
         dialog.exec()
 

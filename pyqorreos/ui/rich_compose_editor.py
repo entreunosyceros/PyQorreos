@@ -289,3 +289,12 @@ class RichComposeEditor(QWidget):
 
     def html(self) -> str:
         return self.editor.toHtml()
+
+    def insert_text(self, text: str) -> None:
+        """Inserta texto en la posición actual del cursor."""
+        if not text:
+            return
+        cursor = self.editor.textCursor()
+        cursor.insertText(text)
+        self.editor.setTextCursor(cursor)
+        self.editor.setFocus()

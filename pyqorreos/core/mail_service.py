@@ -85,6 +85,9 @@ class MailMessage:
     message_id: str = ""
     in_reply_to: str = ""
     references: str = ""
+    unsubscribe_url: str | None = None
+    unsubscribe_mailto: str | None = None
+    one_click_unsubscribe: bool = False
 
 
 def _decode_header_value(value: str | None) -> str:
@@ -767,6 +770,12 @@ class MailService:
             flagged=flagged,
             headers=headers,
         )
+        from pyqorreos.core.list_unsubscribe import parse_list_unsubscribe
+
+        unsub = parse_list_unsubscribe(
+            msg.get("List-Unsubscribe"),
+            msg.get("List-Unsubscribe-Post"),
+        )
 
         return MailMessage(
             uid=uid,
@@ -781,6 +790,9 @@ class MailService:
             message_id=message_id,
             in_reply_to=in_reply_to,
             references=references,
+            unsubscribe_url=unsub.get("url") if isinstance(unsub.get("url"), str) else None,
+            unsubscribe_mailto=unsub.get("mailto") if isinstance(unsub.get("mailto"), str) else None,
+            one_click_unsubscribe=bool(unsub.get("one_click")),
         )
 
     def fetch_attachment_bytes(
@@ -926,17 +938,68 @@ class MailService:
             if status != "OK":
                 raise RuntimeError(f"No se pudo copiar a {dest_folder}")
 
-    def move_message(self, uid: str, dest_folder: str) -> None:
-        self.copy_message(uid, dest_folder)
+    def move_message(self, uid: str, dest_folder: str, source_folder: str | None = None) -> None:
+        self.move_messages([uid], dest_folder, source_folder=source_folder)
+
+    def move_messages(
+        self,
+        uids: list[str],
+        dest_folder: str,
+        *,
+        source_folder: str | None = None,
+    ) -> None:
+        if not uids:
+            return
+        source = source_folder or self._current_folder
         with self._imap_lock:
             self._ensure_connected_unlocked()
             imap = self._require_imap()
-            imap.uid("store", uid, "+FLAGS", "(\\Deleted)")
-            imap.expunge()
+            previous = self._current_folder
+            try:
+                if source and source != self._current_folder:
+                    self._select_on_imap(imap, source)
+                    self._current_folder = source
+                for uid in uids:
+                    status, _ = imap.uid(
+                        "copy", uid, self._quoted_folder(dest_folder)
+                    )
+                    if status != "OK":
+                        raise RuntimeError(f"No se pudo copiar a {dest_folder}")
+                    imap.uid("store", uid, "+FLAGS", "(\\Deleted)")
+                imap.expunge()
+            finally:
+                if previous and previous != source:
+                    try:
+                        self._select_on_imap(imap, previous)
+                        self._current_folder = previous
+                    except imaplib.IMAP4.error:
+                        pass
 
-    def move_messages(self, uids: list[str], dest_folder: str) -> None:
-        for uid in uids:
-            self.move_message(uid, dest_folder)
+    def create_folder(self, name: str, parent: str | None = None) -> str:
+        """Crea una carpeta IMAP y devuelve su ruta completa."""
+        part = name.strip().strip("/")
+        if not part:
+            raise ValueError("El nombre de la carpeta no puede estar vacío")
+        if "/" in part or part in (".", ".."):
+            raise ValueError("Nombre de carpeta no válido")
+        full_path = f"{parent}/{part}" if parent else part
+        with self._imap_lock:
+            self._ensure_connected_unlocked()
+            imap = self._require_imap()
+            status, data = imap.create(self._quoted_folder(full_path))
+        if status != "OK":
+            detail = ""
+            if data:
+                raw = data[0] if isinstance(data, (list, tuple)) else data
+                if isinstance(raw, bytes):
+                    detail = raw.decode("utf-8", errors="replace")
+                elif raw:
+                    detail = str(raw)
+            raise RuntimeError(
+                f"No se pudo crear la carpeta «{full_path}»"
+                + (f": {detail}" if detail else "")
+            )
+        return full_path
 
     def empty_folder(self, folder: str) -> int:
         """Marca todos los mensajes de una carpeta como eliminados y expunge."""
@@ -987,6 +1050,55 @@ class MailService:
             )
             if status != "OK":
                 raise RuntimeError(f"No se pudo guardar borrador en {folder}")
+
+    def fetch_raw_bytes(self, uid: str, folder: str | None = None) -> bytes:
+        """Devuelve el mensaje completo en formato RFC822."""
+        target = folder or self._current_folder
+        _flags, raw = self._fetch_raw_message(uid, target, mark_seen=False)
+        return raw
+
+    def get_storage_quota(self) -> tuple[int, int] | None:
+        """
+        Consulta cuota IMAP (GETQUOTAROOT / GETQUOTA).
+
+        Devuelve (bytes_usados, bytes_límite) o None si el servidor no lo soporta.
+        """
+        with self._imap_lock:
+            self._ensure_connected_unlocked()
+            imap = self._require_imap()
+            try:
+                status, data = imap.getquotaroot(self._quoted_folder("INBOX"))
+            except imaplib.IMAP4.error:
+                return None
+            if status != "OK" or not data:
+                return None
+
+            roots: list[str] = []
+            for item in data:
+                if not isinstance(item, bytes):
+                    continue
+                text = item.decode("utf-8", errors="replace")
+                for part in text.replace("(", " ").replace(")", " ").split():
+                    if part.startswith('"') and part.endswith('"'):
+                        roots.append(part.strip('"'))
+
+            for root in roots:
+                try:
+                    q_status, q_data = imap.getquota(f'"{root}"')
+                except imaplib.IMAP4.error:
+                    continue
+                if q_status != "OK" or not q_data:
+                    continue
+                for line in q_data:
+                    if not isinstance(line, bytes):
+                        continue
+                    decoded = line.decode("utf-8", errors="replace")
+                    match = re.search(
+                        r"STORAGE\s+(\d+)\s+(\d+)", decoded, re.IGNORECASE
+                    )
+                    if match:
+                        return int(match.group(1)), int(match.group(2))
+            return None
 
     def wait_for_idle_updates(
         self, folder: str, timeout_sec: int = 300

@@ -123,6 +123,39 @@ def sanitize_email_html_for_viewer(html: str) -> str:
     html = re.sub(r";\s*;", ";", html)
     html = re.sub(r'content="\s*;', 'content="', html)
     html = re.sub(r';\s*"', '"', html)
+    return _strip_legacy_link_overlay(html)
+
+
+def inject_link_safety_overlay(html: str) -> str:
+    """
+    Compatibilidad: la advertencia de enlaces se muestra en MessageViewer (Qt),
+    no inyectada en el HTML del correo.
+    """
+    return _strip_legacy_link_overlay(html)
+
+
+def _strip_legacy_link_overlay(html: str) -> str:
+    """Elimina restos de la inyección antigua (style/script en el cuerpo)."""
+    if not html or "pyq-link-warning" not in html:
+        return html
+    html = re.sub(
+        r"<style[^>]*id=[\"']pyq-link-warning-style[\"'][^>]*>.*?</style>",
+        "",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    html = re.sub(
+        r"<div[^>]*id=[\"']pyq-link-warning[\"'][^>]*>\s*</div>",
+        "",
+        html,
+        flags=re.IGNORECASE,
+    )
+    html = re.sub(
+        r"<script[^>]*>.*?pyq-link-warning.*?</script>",
+        "",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     return html
 
 

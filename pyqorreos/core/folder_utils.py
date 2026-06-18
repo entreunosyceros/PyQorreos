@@ -44,6 +44,24 @@ def find_drafts_folder(folders: list[str]) -> str | None:
     return None
 
 
+def find_trash_folder(folders: list[str]) -> str | None:
+    for name in folders:
+        if is_trash_folder(name):
+            return name
+    for name in folders:
+        if folder_leaf(name) in ("trash", "deleted items", "papelera"):
+            return name
+    return None
+
+
+def find_spam_folder(folders: list[str]) -> str | None:
+    for name in folders:
+        leaf = folder_leaf(name)
+        if any(k in leaf for k in SPAM_KEYWORDS):
+            return name
+    return None
+
+
 def build_folder_tree(
     folders: list[str], unread_map: dict[str, int] | None = None
 ) -> list[FolderTreeNode]:

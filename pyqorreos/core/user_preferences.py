@@ -11,6 +11,14 @@ from pathlib import Path
 PREFERENCES_FILE = Path.home() / ".config" / "pyqorreos" / "preferences.json"
 LARGE_FOLDER_THRESHOLD = 5000
 
+DEFAULT_COMPOSE_SNIPPETS: list[dict[str, str]] = [
+    {"name": "Saludo formal", "text": "Estimado/a,\n\n"},
+    {"name": "Saludo informal", "text": "Hola,\n\n"},
+    {"name": "Gracias", "text": "Muchas gracias por su respuesta.\n\n"},
+    {"name": "Despedida", "text": "\n\nUn saludo cordial,"},
+    {"name": "Aviso legal", "text": "\n\nEste mensaje y sus adjuntos son confidenciales."},
+]
+
 
 @dataclass
 class UserPreferences:
@@ -24,6 +32,9 @@ class UserPreferences:
     sort_by: str = "date_desc"  # date_desc, date_asc, sender, subject
     headers_only_large_folders: bool = True
     delete_from_server_after_download: bool = False
+    compose_snippets: list[dict[str, str]] = field(
+        default_factory=lambda: list(DEFAULT_COMPOSE_SNIPPETS)
+    )
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -31,7 +42,37 @@ class UserPreferences:
     @classmethod
     def from_dict(cls, data: dict) -> UserPreferences:
         known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
-        return cls(**{k: v for k, v in data.items() if k in known})
+        filtered = {k: v for k, v in data.items() if k in known}
+        if "compose_snippets" not in filtered:
+            filtered["compose_snippets"] = list(DEFAULT_COMPOSE_SNIPPETS)
+        else:
+            filtered["compose_snippets"] = normalize_compose_snippets(
+                filtered["compose_snippets"]
+            )
+        return cls(**filtered)
+
+
+def normalize_compose_snippets(
+    snippets: list[dict[str, str]] | None,
+) -> list[dict[str, str]]:
+    """Filtra entradas inválidas y asegura claves name/text."""
+    if not snippets:
+        return []
+    cleaned: list[dict[str, str]] = []
+    for item in snippets:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        text = str(item.get("text", ""))
+        if not name and not text.strip():
+            continue
+        cleaned.append(
+            {
+                "name": name or "Plantilla",
+                "text": text,
+            }
+        )
+    return cleaned
 
 
 def load_preferences() -> UserPreferences:

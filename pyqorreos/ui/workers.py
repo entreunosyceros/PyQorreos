@@ -392,13 +392,41 @@ class MoveMessagesWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.service.move_messages(self.uids, self.dest_folder)
+            self.service.move_messages(
+                self.uids,
+                self.dest_folder,
+                source_folder=self.source_folder or None,
+            )
             if self.cache and self.account_id and self.source_folder:
                 for uid in self.uids:
                     self.cache.delete_message(
                         self.account_id, self.source_folder, uid
                     )
             self.signals.finished.emit((self.uids, self.dest_folder))
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class CreateFolderWorker(QThread):
+    """Crea una carpeta IMAP y devuelve la lista actualizada de carpetas."""
+
+    def __init__(
+        self,
+        service: MailService,
+        name: str,
+        parent: str | None = None,
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.name = name
+        self.parent = parent
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            created = self.service.create_folder(self.name, self.parent)
+            folders = [f.name for f in self.service.list_folders()]
+            self.signals.finished.emit((created, folders))
         except Exception as exc:
             self.signals.error.emit(str(exc))
 
@@ -484,5 +512,132 @@ class SaveDraftWorker(QThread):
         try:
             self.service.save_draft(self.folder, self.raw_message)
             self.signals.finished.emit(True)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class UnsubscribeWorker(QThread):
+    """Ejecuta desuscripción List-Unsubscribe y mueve el mensaje a la papelera."""
+
+    def __init__(
+        self,
+        service: MailService,
+        uid: str,
+        source_folder: str,
+        trash_folder: str,
+        *,
+        url: str | None,
+        mailto: str | None,
+        one_click: bool,
+        cache: MailCache | None = None,
+        account_id: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.uid = uid
+        self.source_folder = source_folder
+        self.trash_folder = trash_folder
+        self.url = url
+        self.mailto = mailto
+        self.one_click = one_click
+        self.cache = cache
+        self.account_id = account_id
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        from pyqorreos.core.list_unsubscribe import perform_unsubscribe
+
+        try:
+            message = perform_unsubscribe(
+                url=self.url,
+                mailto=self.mailto,
+                one_click=self.one_click,
+            )
+            self.service.move_messages([self.uid], self.trash_folder)
+            if self.cache and self.account_id:
+                self.cache.delete_message(
+                    self.account_id, self.source_folder, self.uid
+                )
+            self.signals.finished.emit(message)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class StorageQuotaWorker(QThread):
+    def __init__(self, service: MailService) -> None:
+        super().__init__()
+        self.service = service
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            quota = self.service.get_storage_quota()
+            self.signals.finished.emit(quota)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class ExportMessageWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        uid: str,
+        folder: str,
+        dest_path: str,
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.uid = uid
+        self.folder = folder
+        self.dest_path = dest_path
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        from pathlib import Path
+
+        from pyqorreos.core.export_mail import save_eml
+
+        try:
+            raw = self.service.fetch_raw_bytes(self.uid, self.folder)
+            save_eml(raw, Path(self.dest_path))
+            self.signals.finished.emit(self.dest_path)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class ExportFolderWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        account_id: str,
+        folder: str,
+        uids: list[str],
+        dest_path: str,
+        cache: MailCache | None = None,
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.account_id = account_id
+        self.folder = folder
+        self.uids = uids
+        self.dest_path = dest_path
+        self.cache = cache
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        from pathlib import Path
+
+        from pyqorreos.core.export_mail import save_mbox
+
+        try:
+            messages: list[tuple[bytes, str | None]] = []
+            for uid in self.uids:
+                try:
+                    raw = self.service.fetch_raw_bytes(uid, self.folder)
+                    messages.append((raw, None))
+                except Exception:
+                    continue
+            count = save_mbox(messages, Path(self.dest_path))
+            self.signals.finished.emit((self.dest_path, count))
         except Exception as exc:
             self.signals.error.emit(str(exc))
