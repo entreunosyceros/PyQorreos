@@ -1,0 +1,488 @@
+"""
+Hilos de trabajo (QThread) para operaciones de red.
+
+Las llamadas IMAP/SMTP bloquean el hilo principal y congelarían la interfaz.
+Cada worker ejecuta la operación en segundo plano y notifica el resultado
+mediante señales Qt (finished / error / progress).
+"""
+
+from __future__ import annotations
+
+from PySide6.QtCore import QObject, QThread, Signal
+
+from pyqorreos.core.account import MailAccount
+from pyqorreos.core.classifier import MailClassifier
+from pyqorreos.core.mail_cache import MailCache
+from pyqorreos.core.mail_service import IMAP_BATCH_SIZE, MailFolder, MailMessage, MailService, MailSummary
+
+
+class WorkerSignals(QObject):
+    """Señales compartidas por workers simples."""
+
+    finished = Signal(object)
+    error = Signal(str)
+
+
+class SyncSignals(QObject):
+    """Señales para sincronización masiva de una carpeta."""
+
+    batch_ready = Signal(object)   # (list[MailSummary], done: int, total: int)
+    progress = Signal(int, int)    # done, total
+    finished = Signal(object)      # (list[MailSummary], list[MailSummary]) all, new
+    error = Signal(str)
+
+
+class ConnectWorker(QThread):
+    """Conecta al servidor IMAP y obtiene la lista de carpetas."""
+
+    def __init__(
+        self,
+        account: MailAccount,
+        password: str,
+        classifier: MailClassifier | None = None,
+    ) -> None:
+        super().__init__()
+        self.account = account
+        self.password = password
+        self.classifier = classifier
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        service = MailService(self.account, self.password, self.classifier)
+        try:
+            service.connect()
+            folders = service.list_folders()
+            self.signals.finished.emit((service, folders))
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class SyncFolderWorker(QThread):
+    """
+    Sincroniza una carpeta de forma incremental.
+
+    Solo descarga cabeceras de mensajes nuevos respecto a la caché local.
+    """
+
+    def __init__(
+        self,
+        service: MailService,
+        account_id: str,
+        folder: str,
+        cache: MailCache | None = None,
+        batch_size: int = IMAP_BATCH_SIZE,
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.account_id = account_id
+        self.folder = folder
+        self.cache = cache or MailCache()
+        self.batch_size = batch_size
+        self.signals = SyncSignals()
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        try:
+            self.service.select_folder(self.folder)
+            cached = self.cache.load_folder(self.account_id, self.folder)
+            cached_map = {summary.uid: summary for summary in cached}
+            initial_uids = set(cached_map.keys())
+
+            uids = self.service.search_all_uids()
+            server_order = [
+                uid.decode("ascii", errors="replace")
+                if isinstance(uid, bytes)
+                else str(uid)
+                for uid in uids
+            ]
+            server_uid_set = set(server_order)
+
+            def on_batch_ui(batch: list[MailSummary], done: int, total: int) -> None:
+                if self._cancelled:
+                    return
+                for summary in batch:
+                    cached_map[summary.uid] = summary
+                if batch:
+                    try:
+                        start_index = server_order.index(batch[0].uid)
+                    except ValueError:
+                        start_index = max(0, done - len(batch))
+                    self.cache.save_batch(
+                        self.account_id, self.folder, batch, start_index
+                    )
+                self.signals.batch_ready.emit((batch, done, total))
+                self.signals.progress.emit(done, total)
+
+            all_summaries = self.service.sync_folder_incremental(
+                cached_map,
+                batch_size=self.batch_size,
+                cancelled=lambda: self._cancelled,
+                on_batch=on_batch_ui,
+                on_progress=lambda done, total: self.signals.progress.emit(
+                    done, total
+                ),
+            )
+
+            if self._cancelled:
+                return
+
+            # Combinar con la caché actual (p. ej. sync en background paralelo).
+            by_uid = {summary.uid: summary for summary in all_summaries}
+            for summary in self.cache.load_folder(self.account_id, self.folder):
+                if summary.uid in server_uid_set and summary.uid not in by_uid:
+                    by_uid[summary.uid] = summary
+            all_summaries = [
+                by_uid[uid] for uid in server_order if uid in by_uid
+            ]
+
+            if server_order and not all_summaries:
+                raise RuntimeError(
+                    f"No se pudieron leer los mensajes de {self.folder}. "
+                    "Pulsa F5 para reintentar."
+                )
+
+            removed = self.service.last_removed_uids
+            if removed:
+                self.cache.remove_uids(self.account_id, self.folder, removed)
+
+            if all_summaries:
+                self.cache.save_folder_ordered(
+                    self.account_id, self.folder, all_summaries
+                )
+            new_summaries = [
+                s for s in all_summaries if s.uid not in initial_uids
+            ]
+            self.signals.finished.emit((all_summaries, new_summaries))
+        except Exception as exc:
+            if not self._cancelled:
+                self.signals.error.emit(str(exc))
+
+
+class FetchMessageWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        uid: str,
+        cache: MailCache | None = None,
+        account_id: str = "",
+        folder: str = "",
+        *,
+        mark_seen: bool = True,
+        delete_after_download: bool = False,
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.uid = uid
+        self.cache = cache
+        self.account_id = account_id
+        self.folder = folder
+        self.mark_seen = mark_seen
+        self.delete_after_download = delete_after_download
+        self.signals = WorkerSignals()
+
+    def _maybe_delete_from_server(self) -> None:
+        if not self.delete_after_download:
+            return
+        self.service.delete_message(self.uid, self.folder or None)
+        if self.cache and self.account_id and self.folder:
+            self.cache.delete_message(self.account_id, self.folder, self.uid)
+
+    def run(self) -> None:
+        try:
+            if self.cache and self.account_id and self.folder:
+                cached = self.cache.load_message_body(
+                    self.account_id, self.folder, self.uid
+                )
+                if cached and (
+                    (cached.body_html and cached.body_html.strip())
+                    or (
+                        cached.body_text
+                        and cached.body_text.strip()
+                        not in ("", "(Sin contenido)", "(Mensaje vacío)")
+                    )
+                ):
+                    self._maybe_delete_from_server()
+                    self.signals.finished.emit(cached)
+                    return
+
+            message = self.service.fetch_message(
+                self.uid,
+                folder=self.folder or None,
+                load_remote_images=False,
+                mark_seen=self.mark_seen,
+            )
+            if self.cache and self.account_id and self.folder:
+                self.cache.save_message_body(
+                    self.account_id, self.folder, message
+                )
+                if self.mark_seen:
+                    self.cache.update_seen(
+                        self.account_id, self.folder, self.uid, True
+                    )
+            self._maybe_delete_from_server()
+            self.signals.finished.emit(message)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class EnhanceHtmlWorker(QThread):
+    """Descarga imágenes remotas para un mensaje ya mostrado en pantalla."""
+
+    def __init__(self, service: MailService, uid: str, html: str) -> None:
+        super().__init__()
+        self.service = service
+        self.uid = uid
+        self.html = html
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            enhanced = self.service.enhance_message_html(self.html)
+            self.signals.finished.emit((self.uid, enhanced))
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class SetSeenWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        uid: str,
+        seen: bool,
+        cache: MailCache | None = None,
+        account_id: str = "",
+        folder: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.uid = uid
+        self.seen = seen
+        self.cache = cache
+        self.account_id = account_id
+        self.folder = folder
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            self.service.set_seen(self.uid, self.seen, self.folder or None)
+            if self.cache and self.account_id and self.folder:
+                self.cache.update_seen(
+                    self.account_id, self.folder, self.uid, self.seen
+                )
+            self.signals.finished.emit((self.uid, self.seen))
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class SendMailWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        to: str,
+        subject: str,
+        body: str,
+        cc: str = "",
+        bcc: str = "",
+        body_html: str | None = None,
+        attachments: list | None = None,
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.to = to
+        self.subject = subject
+        self.body = body
+        self.cc = cc
+        self.bcc = bcc
+        self.body_html = body_html
+        self.attachments = attachments or []
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            self.service.send_message(
+                self.to,
+                self.subject,
+                self.body,
+                self.cc,
+                self.bcc,
+                body_html=self.body_html,
+                attachments=self.attachments,
+            )
+            self.signals.finished.emit(True)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class DeleteMessageWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        uid: str,
+        cache: MailCache | None = None,
+        account_id: str = "",
+        folder: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.uid = uid
+        self.cache = cache
+        self.account_id = account_id
+        self.folder = folder
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            self.service.delete_message(self.uid, self.folder or None)
+            if self.cache and self.account_id and self.folder:
+                self.cache.delete_message(self.account_id, self.folder, self.uid)
+            self.signals.finished.emit(self.uid)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class DeleteMessagesWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        uids: list[str],
+        cache: MailCache | None = None,
+        account_id: str = "",
+        folder: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.uids = uids
+        self.cache = cache
+        self.account_id = account_id
+        self.folder = folder
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            self.service.delete_messages(self.uids, self.folder or None)
+            if self.cache and self.account_id and self.folder:
+                for uid in self.uids:
+                    self.cache.delete_message(self.account_id, self.folder, uid)
+            self.signals.finished.emit(self.uids)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class MoveMessagesWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        uids: list[str],
+        dest_folder: str,
+        cache: MailCache | None = None,
+        account_id: str = "",
+        source_folder: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.uids = uids
+        self.dest_folder = dest_folder
+        self.cache = cache
+        self.account_id = account_id
+        self.source_folder = source_folder
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            self.service.move_messages(self.uids, self.dest_folder)
+            if self.cache and self.account_id and self.source_folder:
+                for uid in self.uids:
+                    self.cache.delete_message(
+                        self.account_id, self.source_folder, uid
+                    )
+            self.signals.finished.emit((self.uids, self.dest_folder))
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class EmptyFolderWorker(QThread):
+    def __init__(self, service: MailService, folder: str, cache: MailCache | None = None, account_id: str = "") -> None:
+        super().__init__()
+        self.service = service
+        self.folder = folder
+        self.cache = cache
+        self.account_id = account_id
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            count = self.service.empty_folder(self.folder)
+            if self.cache and self.account_id:
+                self.cache.clear_folder(self.account_id, self.folder)
+            self.signals.finished.emit((self.folder, count))
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class FolderUnreadWorker(QThread):
+    def __init__(
+        self,
+        account: MailAccount,
+        password: str,
+        folders: list[str],
+    ) -> None:
+        super().__init__()
+        self.account = account
+        self.password = password
+        self.folders = folders
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        service = MailService(self.account, self.password)
+        try:
+            service.connect()
+            counts = service.get_folder_unread_counts(self.folders)
+            self.signals.finished.emit(counts)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+        finally:
+            service.disconnect()
+
+
+class FetchAttachmentWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        uid: str,
+        part_index: int,
+        folder: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.uid = uid
+        self.part_index = part_index
+        self.folder = folder
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            data, filename = self.service.fetch_attachment_bytes(
+                self.uid, self.part_index, self.folder or None
+            )
+            self.signals.finished.emit((filename, data))
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
+class SaveDraftWorker(QThread):
+    def __init__(self, service: MailService, folder: str, raw_message: bytes) -> None:
+        super().__init__()
+        self.service = service
+        self.folder = folder
+        self.raw_message = raw_message
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            self.service.save_draft(self.folder, self.raw_message)
+            self.signals.finished.emit(True)
+        except Exception as exc:
+            self.signals.error.emit(str(exc))

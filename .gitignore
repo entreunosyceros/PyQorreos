@@ -1,0 +1,91 @@
+# --- Entorno virtual y dependencias ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+*.manifest
+*.spec
+
+
+
+# --- Configuración y datos sensibles del usuario ---
+# (también se guardan en ~/.config/pyqorreos/, por si se copian al proyecto)
+.env
+.env.*
+*.env
+secrets.json
+credentials.json
+accounts.json
+classification.json
+preferences.json
+mail_cache.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# --- Herramientas de test y cobertura ---
+tests/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+unittest.xml
+
+# --- IDEs y editores ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+*.sublime-project
+*.sublime-workspace
+
+# --- Cursor / agentes ---
+.cursor/
+*.log
+
+# --- Sistema operativo ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Empaquetado / distribución ---
+*.dmg
+*.app
+*.exe
+*.msi
+
+# --- Jupyter (por si se usa para pruebas) ---
+.ipynb_checkpoints/
+
+# --- mypy / type checkers / linters ---
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
