@@ -120,7 +120,7 @@ python main.py
 En la lista de mensajes puedes usar **selección múltiple** (`Ctrl+clic`, `Shift+clic`) para eliminar o mover varios correos.
 
 ## Estructura del proyecto
-<div align="center"
+<div align="center">
 <img width="451" height="733" alt="about-PyQorreo" src="https://github.com/user-attachments/assets/f2a42a71-0a2f-4c87-9285-e4827177c901" />
 </div>
 
