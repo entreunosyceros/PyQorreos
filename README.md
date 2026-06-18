@@ -14,6 +14,8 @@ Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**.
 
 ## Características
 
+<img width="1917" height="1045" alt="PyQorreos-funcionando" src="https://github.com/user-attachments/assets/36d6b101-cc47-4595-8f02-8c0f8b817588" />
+
 ### Cuentas y conexión
 - Varias cuentas de correo (Gmail, Outlook, Yahoo o servidor personalizado)
 - Selector rápido de cuenta activa y gestor de cuentas (añadir, editar, eliminar)
