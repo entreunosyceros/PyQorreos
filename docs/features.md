@@ -4,7 +4,6 @@
 
 Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [Uso rápido](usage.md).
 
-<img width="1917" height="1045" alt="PyQorreos-funcionando" src="https://github.com/user-attachments/assets/36d6b101-cc47-4595-8f02-8c0f8b817588" />
 
 ## Cuentas y conexión
 
