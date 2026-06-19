@@ -61,6 +61,10 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Atajos: `Ctrl+R`, `Ctrl+Shift+R`, `Ctrl+L`, `Supr`, `F5`, `Enter` (abrir mensaje) — [tabla completa](keyboard-shortcuts.md)
 
 ## Redacción
+<div align="center">
+<img width="818" height="655" alt="redactar-correo" src="https://github.com/user-attachments/assets/133d2766-2950-4b74-9cac-378c5135b511" />
+</div>
+
 
 - Editor enriquecido: negrita, cursiva, subrayado, listas, color, enlaces e imágenes
 - **Plantillas** de texto rápido (pestaña «Plantillas» en Preferencias; menú en el editor al redactar)
