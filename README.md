@@ -6,11 +6,19 @@
 ![PySide6](https://img.shields.io/badge/UI-PySide6-green?style=flat-square&logo=qt&logoColor=white)
 ![License](https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square)
 
-<img width="1408" height="768" alt="PyQorreos" src="https://github.com/user-attachments/assets/19640ae3-ae11-419d-b033-9e1ee7fbcfc2" />
+<div align="center">
+
+<img width="451" height="733" alt="about-PyQorreo" src="https://github.com/user-attachments/assets/435c73a7-c688-45ab-ba8e-54084536df76" />
+
+</div>
 
 Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**. Cliente ligero, fácil de modificar y orientado al aprendizaje y al uso diario — sin pretender competir con Thunderbird ni Evolution.
 
 ## ¿Por qué otro gestor de correo?
+<div align="center">
+
+<img width="1917" height="1045" alt="PyQorreos-funcionando" src="https://github.com/user-attachments/assets/a1e2eb19-faf3-4190-8b9b-5f480557edb6" />
+</div>
 
 - Aprender IMAP y SMTP en un código legible
 - Practicar PySide6 con un proyecto real
