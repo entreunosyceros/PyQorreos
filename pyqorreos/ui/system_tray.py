@@ -43,8 +43,11 @@ class SystemTray:
         self._icon.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, msecs)
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        # Doble clic restaura la ventana principal.
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+        # Doble clic (o clic simple en algunos entornos) restaura la ventana principal.
+        if reason in (
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+            QSystemTrayIcon.ActivationReason.MiddleClick,
+        ):
             self._parent.show_main_window()
 
     @staticmethod

@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt, QThread, QTimer
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -31,12 +32,14 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
+    QToolButton,
     QTreeWidget,
     QVBoxLayout,
     QWidget,
@@ -61,6 +64,7 @@ from pyqorreos.core.user_preferences import UserPreferences, load_preferences, s
 from pyqorreos.ui.about_dialog import AboutDialog, LOGO_PATH
 from pyqorreos.ui.account_dialog import AccountDialog
 from pyqorreos.ui.accounts_manager_dialog import AccountsManagerDialog
+from pyqorreos.ui.action_icons import action_icon, apply_action_icon
 from pyqorreos.ui.attachment_panel import AttachmentPanel
 from pyqorreos.ui.background_sync import BackgroundSyncManager
 from pyqorreos.ui.compose_dialog import ComposeDialog
@@ -69,6 +73,15 @@ from pyqorreos.ui.message_viewer import MessageViewer
 from pyqorreos.ui.notification_utils import format_new_mail_notification
 from pyqorreos.ui.preferences_dialog import PreferencesDialog
 from pyqorreos.ui.system_tray import SystemTray
+from pyqorreos.ui.theme import (
+    apply_app_theme,
+    apply_message_viewer_theme,
+    category_colors,
+    mark_object,
+    mark_role,
+    prevent_context_menu,
+    text_color,
+)
 from pyqorreos.ui.workers import (
     ConnectWorker,
     CreateFolderWorker,
@@ -82,6 +95,7 @@ from pyqorreos.ui.workers import (
     FetchAttachmentWorker,
     FetchMessageWorker,
     FolderUnreadWorker,
+    LoadFolderWorker,
     MoveMessagesWorker,
     SaveDraftWorker,
     SetSeenWorker,
@@ -128,88 +142,9 @@ def _selected_summary(
     return next((m for m in messages if m.uid == uid), None)
 
 
-# Colores de fondo por categoría en la tabla de mensajes.
+# Colores por categoría (tema claro por defecto; ver _category_colors()).
 TEXT_COLOR = QColor("#1a1a1a")
-CATEGORY_COLORS = {
-    MailCategory.NORMAL: QColor(255, 255, 255),
-    MailCategory.IMPORTANT: QColor(255, 248, 220),
-    MailCategory.SPAM: QColor(255, 235, 235),
-}
-
-_READER_BTN_COMMON = """
-QPushButton {
-    border-radius: 5px;
-    padding: 7px 12px;
-    font-size: 10pt;
-    font-weight: 600;
-    min-height: 32px;
-}
-QPushButton:disabled {
-    background-color: #ececec;
-    color: #9a9a9a;
-    border: 1px solid #d4d4d4;
-}
-"""
-
-_READER_BTN_PRIMARY = _READER_BTN_COMMON + """
-QPushButton {
-    background-color: #2d7dd2;
-    color: #ffffff;
-    border: 1px solid #1f5fa8;
-}
-QPushButton:hover:!disabled {
-    background-color: #3a8de0;
-    border-color: #1a5496;
-}
-QPushButton:pressed:!disabled {
-    background-color: #1f5fa8;
-}
-"""
-
-_READER_BTN_SECONDARY = _READER_BTN_COMMON + """
-QPushButton {
-    background-color: #f0f4f8;
-    color: #1a1a1a;
-    border: 1px solid #b8c4d0;
-}
-QPushButton:hover:!disabled {
-    background-color: #e3ebf3;
-    border-color: #2d7dd2;
-}
-QPushButton:pressed:!disabled {
-    background-color: #d5e3f0;
-}
-"""
-
-_READER_BTN_DANGER = _READER_BTN_COMMON + """
-QPushButton {
-    background-color: #fff5f5;
-    color: #b42318;
-    border: 1px solid #f0a8a0;
-}
-QPushButton:hover:!disabled {
-    background-color: #ffe8e6;
-    border-color: #d92d20;
-}
-QPushButton:pressed:!disabled {
-    background-color: #ffd5d2;
-}
-"""
-
-_READER_BTN_CATEGORY = _READER_BTN_COMMON + """
-QPushButton {
-    background-color: #ffffff;
-    color: #333333;
-    border: 1px solid #c8c8c8;
-}
-QPushButton:hover:!disabled {
-    background-color: #f7f7f7;
-    border-color: #888888;
-}
-QPushButton:pressed:!disabled {
-    background-color: #ececec;
-}
-"""
+CATEGORY_COLORS = category_colors("light")
 
 
 class MainWindow(QMainWindow):
@@ -225,6 +160,7 @@ class MainWindow(QMainWindow):
         self._workers: list = []
         self._quitting = False
         self._tray: SystemTray | None = None
+        self._tray_menu: QMenu | None = None
         self._all_messages: list[MailSummary] = []
         self._current_folder = "INBOX"
         self._current_page = 0
@@ -233,6 +169,7 @@ class MainWindow(QMainWindow):
         self._current_message: MailMessage | None = None
         self._message_fetch_worker: FetchMessageWorker | None = None
         self._pending_fetch_uid: str | None = None
+        self._fetch_generation = 0
         self._reader_buttons: list[QPushButton] = []
         self._enhance_worker: EnhanceHtmlWorker | None = None
         self._pending_enhance_uid: str | None = None
@@ -252,14 +189,42 @@ class MainWindow(QMainWindow):
         self._background_sync.signals.new_mail.connect(self._on_background_new_mail)
         self._background_sync.signals.folder_updated.connect(self._on_background_folder_updated)
 
+        self._load_folder_worker: LoadFolderWorker | None = None
+        self._connect_worker: ConnectWorker | None = None
+        self._connect_generation = 0
+        self._folder_unread_worker: FolderUnreadWorker | None = None
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(250)
+        self._search_timer.timeout.connect(self._apply_list_filters)
+        self._folder_unread_timer = QTimer(self)
+        self._folder_unread_timer.setSingleShot(True)
+        self._folder_unread_timer.setInterval(400)
+        self._folder_unread_timer.timeout.connect(self._run_folder_unread_refresh)
+        self._splitter_guard_timer = QTimer(self)
+        self._splitter_guard_timer.setSingleShot(True)
+        self._splitter_guard_timer.setInterval(120)
+        self._splitter_guard_timer.timeout.connect(self._resume_splitter_panels)
+        self._splitter_drag_active = False
+        self._ui_compact = False
+        self._ui_narrow = False
+        self._reader_label_mode = ""
+
         self.setWindowTitle("PyQorreos")
-        self.setMinimumSize(1000, 650)
+        self.setMinimumSize(720, 580)
         self._build_actions()
         self._build_ui()
         self._build_menu()
         self._build_toolbar()
         self._build_reader_actions()
         self._build_system_tray()
+        self._apply_theme()
+        self._configure_chrome_context_menus()
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._finalize_process_exit)
+        self._update_compact_ui(self.width())
+        QTimer.singleShot(0, self._update_reader_action_labels)
 
         if self.accounts:
             last_id = self.settings.get_last_account_id()
@@ -267,9 +232,29 @@ class MainWindow(QMainWindow):
                 (a for a in self.accounts if a.id == last_id),
                 self.accounts[0],
             )
-            self._connect_account(account)
+            self._begin_startup(account)
         else:
             self._show_welcome()
+
+    def _begin_startup(self, account: MailAccount) -> None:
+        """Muestra la caché local al instante y arranca la descarga de correo nuevo."""
+        self.current_account = account
+        self.settings.set_last_account_id(account.id)
+        self._refresh_account_combo(account.id)
+        # Al abrir la app, la bandeja muestra siempre los correos más recientes arriba.
+        self.sort_combo.blockSignals(True)
+        self.sort_combo.setCurrentIndex(0)
+        self.sort_combo.blockSignals(False)
+        self._current_page = 0
+        self._preload_cached_folder(account.id, "INBOX")
+        self._background_sync.set_accounts(self.accounts, account.id)
+        if self._prefs.background_sync_enabled:
+            # Otras cuentas: INBOX en paralelo; la activa se sincroniza al conectar.
+            self._background_sync.sync_all_accounts_now(
+                exclude_account_id=account.id
+            )
+        self.status_bar.showMessage(f"Conectando a {account.email} y buscando correo nuevo…")
+        self._connect_account(account, block_ui=False)
 
     def _build_ui(self) -> None:
         central = QWidget()
@@ -280,14 +265,15 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Panel de carpetas
-        folder_panel = QWidget()
+        self._folder_panel = QWidget()
+        mark_object(self._folder_panel, "pyqFolderPanel")
+        folder_panel = self._folder_panel
         folder_layout = QVBoxLayout(folder_panel)
         folder_layout.setContentsMargins(8, 8, 4, 8)
         folder_label = QLabel("Carpetas")
         folder_label.setFont(_font_bold(folder_label.font(), 11))
         folder_layout.addWidget(folder_label)
 
-        folder_btn_row = QHBoxLayout()
         self.btn_new_folder = QPushButton("＋ Carpeta")
         self.btn_new_folder.setToolTip("Crear una carpeta nueva en el servidor")
         self.btn_new_folder.clicked.connect(lambda: self._create_folder())
@@ -296,6 +282,7 @@ class MainWindow(QMainWindow):
             "Crear una subcarpeta dentro de la carpeta seleccionada"
         )
         self.btn_new_subfolder.clicked.connect(self._create_subfolder)
+        folder_btn_row = QHBoxLayout()
         folder_btn_row.addWidget(self.btn_new_folder)
         folder_btn_row.addWidget(self.btn_new_subfolder)
         folder_btn_row.addStretch()
@@ -303,28 +290,7 @@ class MainWindow(QMainWindow):
 
         self.folder_tree = QTreeWidget()
         self.folder_tree.setHeaderHidden(True)
-        self.folder_tree.setStyleSheet(
-            """
-            QTreeWidget {
-                background-color: #f4f4f4;
-                color: #1a1a1a;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-            }
-            QTreeWidget::item {
-                padding: 6px 8px;
-                color: #1a1a1a;
-            }
-            QTreeWidget::item:selected {
-                background-color: #2d7dd2;
-                color: #ffffff;
-            }
-            QTreeWidget::item:hover:!selected {
-                background-color: #e8e8e8;
-                color: #1a1a1a;
-            }
-            """
-        )
+        mark_object(self.folder_tree, "pyqFolderTree")
         self.folder_tree.currentItemChanged.connect(self._on_folder_tree_changed)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(self._show_folder_context_menu)
@@ -337,69 +303,85 @@ class MainWindow(QMainWindow):
         self.quota_bar.setVisible(False)
         folder_layout.addWidget(self.quota_bar)
         self.quota_label = QLabel("")
-        self.quota_label.setStyleSheet("color: #666; font-size: 9pt;")
+        mark_role(self.quota_label, "hint")
         self.quota_label.setWordWrap(True)
         self.quota_label.setVisible(False)
         folder_layout.addWidget(self.quota_label)
 
+        folder_panel.setMinimumWidth(120)
         splitter.addWidget(folder_panel)
 
         # Panel central: lista de mensajes
-        message_panel = QWidget()
+        self._message_panel = QWidget()
+        mark_object(self._message_panel, "pyqMailPanel")
+        message_panel = self._message_panel
         message_layout = QVBoxLayout(message_panel)
         message_layout.setContentsMargins(4, 8, 4, 8)
 
         account_row = QHBoxLayout()
         account_row.addWidget(QLabel("Cuenta:"))
         self.account_combo = QComboBox()
-        self.account_combo.setMinimumWidth(220)
+        self.account_combo.setMinimumWidth(100)
+        self.account_combo.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         self.account_combo.currentIndexChanged.connect(self._on_account_combo_changed)
         account_row.addWidget(self.account_combo, 1)
         self.btn_manage_accounts = QPushButton("Gestionar…")
         self.btn_manage_accounts.clicked.connect(self._manage_accounts)
         account_row.addWidget(self.btn_manage_accounts)
-        message_layout.addLayout(account_row)
-        self._refresh_account_combo()
 
-        filter_row = QHBoxLayout()
-        filter_row.addWidget(QLabel("Buscar:"))
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Asunto o remitente…")
-        self.search_edit.textChanged.connect(self._apply_list_filters)
-        filter_row.addWidget(self.search_edit, 1)
+        self.search_edit.setMinimumWidth(80)
+        self.search_edit.textChanged.connect(lambda _text: self._search_timer.start())
         self.unread_only_check = QCheckBox("Solo no leídos")
         self.unread_only_check.toggled.connect(self._apply_list_filters)
-        filter_row.addWidget(self.unread_only_check)
-        filter_row.addWidget(QLabel("Filtrar:"))
         self.category_filter = QComboBox()
         self.category_filter.addItems(["Todos", "Normal", "Importante", "Spam"])
         self.category_filter.currentTextChanged.connect(self._apply_category_filter)
-        filter_row.addWidget(self.category_filter)
-        filter_row.addWidget(QLabel("Orden:"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(
             ["Fecha ↓", "Fecha ↑", "Remitente", "Asunto"]
         )
         self.sort_combo.currentIndexChanged.connect(self._apply_list_filters)
-        filter_row.addWidget(self.sort_combo)
         sort_map = {"date_desc": 0, "date_asc": 1, "sender": 2, "subject": 3}
+        self.sort_combo.blockSignals(True)
         self.sort_combo.setCurrentIndex(sort_map.get(self._prefs.sort_by, 0))
-        message_layout.addLayout(filter_row)
+        self.sort_combo.blockSignals(False)
+
+        self._message_header = QWidget()
+        self._message_header.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        header_layout = QVBoxLayout(self._message_header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+        header_layout.addLayout(account_row)
+        filter_row1 = QHBoxLayout()
+        filter_row1.addWidget(QLabel("Buscar:"))
+        filter_row1.addWidget(self.search_edit, 1)
+        filter_row1.addWidget(self.unread_only_check)
+        filter_row2 = QHBoxLayout()
+        filter_row2.addWidget(QLabel("Filtrar:"))
+        filter_row2.addWidget(self.category_filter)
+        filter_row2.addWidget(QLabel("Orden:"))
+        filter_row2.addWidget(self.sort_combo, 1)
+        header_layout.addLayout(filter_row1)
+        header_layout.addLayout(filter_row2)
+        message_layout.addWidget(self._message_header)
 
         self.message_table = QTableWidget(0, 4)
         self.message_table.setHorizontalHeaderLabels(["Tipo", "De", "Asunto", "Fecha"])
-        self.message_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch
-        )
-        self.message_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.message_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.message_table.horizontalHeader().setSectionResizeMode(
-            3, QHeaderView.ResizeMode.ResizeToContents
-        )
+        table_header = self.message_table.horizontalHeader()
+        table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        table_header.resizeSection(0, 96)
+        table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        table_header.resizeSection(1, 160)
+        table_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        table_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        table_header.resizeSection(3, 118)
+        table_header.setStretchLastSection(False)
         self.message_table.setSelectionBehavior(
             QTableWidget.SelectionBehavior.SelectRows
         )
@@ -408,32 +390,14 @@ class MainWindow(QMainWindow):
         )
         self.message_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.message_table.setAlternatingRowColors(False)
-        self.message_table.setStyleSheet(
-            """
-            QTableWidget {
-                background-color: #ffffff;
-                color: #1a1a1a;
-                gridline-color: #dddddd;
-                selection-background-color: #2d7dd2;
-                selection-color: #ffffff;
-            }
-            QTableWidget::item {
-                color: #1a1a1a;
-                padding: 2px 4px;
-            }
-            QHeaderView::section {
-                background-color: #f0f0f0;
-                color: #1a1a1a;
-                padding: 4px;
-                border: 1px solid #dddddd;
-            }
-            """
-        )
+        mark_object(self.message_table, "pyqMessageTable")
+        self.message_table.viewport().setAutoFillBackground(True)
         self.message_table.verticalHeader().setVisible(False)
         self.message_table.itemSelectionChanged.connect(
             self._on_message_selection_changed
         )
         self.message_table.cellDoubleClicked.connect(self._on_message_double_clicked)
+        self.message_table.addAction(self._act_delete)
         open_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Return), self.message_table)
         open_shortcut.activated.connect(self._open_selected_message)
         open_shortcut_enter = QShortcut(QKeySequence(Qt.Key.Key_Enter), self.message_table)
@@ -442,10 +406,9 @@ class MainWindow(QMainWindow):
         self.message_table.customContextMenuRequested.connect(
             self._show_message_context_menu
         )
-        message_layout.addWidget(self.message_table)
+        message_layout.addWidget(self.message_table, 1)
 
         # Paginación (50 correos por página)
-        pagination_row = QHBoxLayout()
         self.btn_delete_selected = QPushButton("🗑 Eliminar")
         self.btn_delete_selected.setToolTip(
             "Eliminar los mensajes seleccionados (Supr)"
@@ -457,6 +420,15 @@ class MainWindow(QMainWindow):
         self.btn_move_selected.clicked.connect(self._show_move_messages_dialog)
         self.btn_move_selected.setEnabled(False)
         self._list_action_buttons = [self.btn_delete_selected, self.btn_move_selected]
+
+        self._message_footer = QWidget()
+        self._message_footer.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        footer_layout = QVBoxLayout(self._message_footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(4)
+        pagination_row = QHBoxLayout()
         pagination_row.addWidget(self.btn_delete_selected)
         pagination_row.addWidget(self.btn_move_selected)
         pagination_row.addSpacing(12)
@@ -473,18 +445,25 @@ class MainWindow(QMainWindow):
         pagination_row.addWidget(self.btn_next_page)
         pagination_row.addStretch()
         pagination_row.addWidget(self.btn_cancel_sync)
-        message_layout.addLayout(pagination_row)
+        footer_layout.addLayout(pagination_row)
 
         # Barra de progreso de sincronización
         self.sync_progress = QProgressBar()
         self.sync_progress.setVisible(False)
         self.sync_progress.setTextVisible(True)
-        message_layout.addWidget(self.sync_progress)
+        footer_layout.addWidget(self.sync_progress)
+        message_layout.addWidget(self._message_footer)
 
+        self._refresh_account_combo()
+
+        message_panel.setMinimumWidth(240)
+        message_panel.setAutoFillBackground(True)
         splitter.addWidget(message_panel)
 
         # Panel de lectura
-        reader_panel = QWidget()
+        self._reader_panel = QWidget()
+        mark_object(self._reader_panel, "pyqReaderPanel")
+        reader_panel = self._reader_panel
         reader_layout = QVBoxLayout(reader_panel)
         reader_layout.setContentsMargins(4, 8, 8, 8)
         self.subject_label = QLabel("Selecciona un mensaje")
@@ -493,14 +472,14 @@ class MainWindow(QMainWindow):
         reader_layout.addWidget(self.subject_label)
 
         self.meta_label = QLabel("")
-        self.meta_label.setStyleSheet("color: #666;")
+        mark_role(self.meta_label, "meta")
         self.meta_label.setWordWrap(True)
         reader_layout.addWidget(self.meta_label)
 
-        # Botones de acción del mensaje abierto (estilo Thunderbird)
+        # Botones de acción del mensaje abierto (dos filas con scroll horizontal si hace falta)
         self.reader_actions = QWidget()
         self.reader_actions.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
         reader_layout.addWidget(self.reader_actions)
 
@@ -510,6 +489,7 @@ class MainWindow(QMainWindow):
         reader_layout.addWidget(self.attachment_panel)
 
         self.message_viewer = MessageViewer()
+        self.message_viewer.setMinimumHeight(120)
         self.message_viewer.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -519,14 +499,206 @@ class MainWindow(QMainWindow):
         self.message_viewer.translate_requested.connect(self._on_translate_requested)
         self.message_viewer.link_hover_changed.connect(self._on_viewer_link_hover)
         reader_layout.addWidget(self.message_viewer, 1)
+
+        reader_panel.setMinimumWidth(200)
+        reader_panel.setAutoFillBackground(True)
         splitter.addWidget(reader_panel)
 
-        splitter.setSizes([180, 380, 440])
-        layout.addWidget(splitter)
+        self.main_splitter = splitter
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setHandleWidth(6)
+        self.main_splitter.setOpaqueResize(False)
+        self.main_splitter.setStretchFactor(0, 1)
+        self.main_splitter.setStretchFactor(1, 3)
+        self.main_splitter.setStretchFactor(2, 4)
+        self.main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
+        self.main_splitter.installEventFilter(self)
+        self.main_splitter.setSizes([180, 380, 440])
+        layout.addWidget(self.main_splitter)
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Listo")
+
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.main_splitter:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                self._pause_splitter_panels()
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                self._splitter_guard_timer.start(60)
+        return super().eventFilter(watched, event)
+
+    def _pause_splitter_panels(self) -> None:
+        """Congela repintados de los paneles mientras se arrastra un divisor."""
+        if self._splitter_drag_active:
+            return
+        self._splitter_drag_active = True
+        for panel in (self._folder_panel, self._message_panel, self._reader_panel):
+            panel.setUpdatesEnabled(False)
+        self.message_table.viewport().setUpdatesEnabled(False)
+        self.message_viewer.set_viewer_updates_enabled(False)
+
+    def _on_main_splitter_moved(self, _pos: int, _index: int) -> None:
+        """Tras soltar el divisor, repinta los paneles cuando termine el ajuste."""
+        self._splitter_guard_timer.start(80)
+
+    def _resume_splitter_panels(self) -> None:
+        if not self._splitter_drag_active:
+            return
+        self.message_viewer.set_viewer_updates_enabled(True)
+        self.message_table.viewport().setUpdatesEnabled(True)
+        for panel in (self._folder_panel, self._message_panel, self._reader_panel):
+            panel.setUpdatesEnabled(True)
+            panel.repaint()
+        self.main_splitter.repaint()
+        self._splitter_drag_active = False
+        self._update_reader_action_labels()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_compact_ui(event.size().width())
+        self._update_reader_action_labels()
+
+    def _update_compact_ui(self, width: int | None = None) -> None:
+        """Acorta etiquetas y recalcula franjas de botones según el ancho de ventana."""
+        width = width if width is not None else self.width()
+        compact = width < 1120
+        narrow = width < 920
+        if compact == self._ui_compact and narrow == self._ui_narrow:
+            return
+        self._ui_compact = compact
+        self._ui_narrow = narrow
+
+        self.btn_new_folder.setText("＋" if narrow else "＋ Carpeta")
+        self.btn_new_subfolder.setText("＋ Sub" if narrow else "＋ Subcarpeta")
+        self.btn_manage_accounts.setText("…" if narrow else "Gestionar…")
+        self.btn_delete_selected.setText("🗑" if narrow else "🗑 Eliminar")
+        self.btn_move_selected.setText("📁" if narrow else "📁 Mover a…")
+        self.btn_prev_page.setText("◀" if narrow else "◀ Anterior")
+        self.btn_next_page.setText("▶" if narrow else "Siguiente ▶")
+        self.btn_cancel_sync.setText("✕ Sync" if compact else "Cancelar sincronización")
+        self._apply_toolbar_labels(narrow)
+        self.message_viewer.set_compact_toolbar(compact)
+        self.message_viewer.sync_toolbar_strip()
+
+    def _reader_panel_width(self) -> int:
+        if hasattr(self, "reader_actions") and self.reader_actions.width() > 0:
+            return self.reader_actions.width()
+        if hasattr(self, "_reader_panel") and self._reader_panel.width() > 0:
+            return self._reader_panel.width()
+        return max(self.width() // 3, 280)
+
+    def _reader_button_label_mode(self) -> str:
+        width = self._reader_panel_width()
+        if width >= 560:
+            return "full"
+        if width >= 400:
+            return "compact"
+        return "minimal"
+
+    def _reader_action_specs(self) -> tuple[tuple, tuple]:
+        mode = self._reader_button_label_mode()
+        labels = {
+            "full": {
+                "row1": (
+                    (self._act_reply, "↩ Responder", "primary"),
+                    (self._act_reply_all, "↩↩ Responder a todos", "primary"),
+                    (self._act_forward, "→ Reenviar", "secondary"),
+                    (self._act_delete, "🗑 Eliminar", "danger"),
+                ),
+                "row2": (
+                    (self._act_mark_important, "★ Importante", "category"),
+                    (self._act_mark_spam, "⚠ Spam", "category"),
+                    (self._act_mark_normal, "● Normal", "category"),
+                    (self._act_unsubscribe, "✉ Dar de baja", "secondary"),
+                ),
+            },
+            "compact": {
+                "row1": (
+                    (self._act_reply, "↩ Resp.", "primary"),
+                    (self._act_reply_all, "↩↩ Todos", "primary"),
+                    (self._act_forward, "→ Reenv.", "secondary"),
+                    (self._act_delete, "🗑", "danger"),
+                ),
+                "row2": (
+                    (self._act_mark_important, "★ Imp.", "category"),
+                    (self._act_mark_spam, "⚠ Spam", "category"),
+                    (self._act_mark_normal, "● Norm.", "category"),
+                    (self._act_unsubscribe, "✉ Baja", "secondary"),
+                ),
+            },
+            "minimal": {
+                "row1": (
+                    (self._act_reply, "↩", "primary"),
+                    (self._act_reply_all, "↩↩", "primary"),
+                    (self._act_forward, "→", "secondary"),
+                    (self._act_delete, "🗑", "danger"),
+                ),
+                "row2": (
+                    (self._act_mark_important, "★", "category"),
+                    (self._act_mark_spam, "⚠", "category"),
+                    (self._act_mark_normal, "●", "category"),
+                    (self._act_unsubscribe, "✉", "secondary"),
+                ),
+            },
+        }
+        block = labels[mode]
+        return block["row1"], block["row2"]
+
+    def _update_reader_action_labels(self) -> None:
+        mode = self._reader_button_label_mode()
+        if mode == self._reader_label_mode:
+            return
+        self._reader_label_mode = mode
+        if hasattr(self, "_reader_row1"):
+            self._build_reader_actions()
+
+    def _setup_menu_action(
+        self,
+        action: QAction,
+        icon_key: str,
+        text: str,
+        *,
+        toolbar_compact: str | None = "",
+    ) -> QAction:
+        """Texto completo para menús; en barra estrecha puede quedar solo el icono."""
+        action.setText(text)
+        action.setProperty("pyq_full_text", text)
+        action.setProperty("pyq_toolbar_compact", toolbar_compact)
+        apply_action_icon(action, icon_key)
+        return action
+
+    def _apply_toolbar_labels(self, narrow: bool) -> None:
+        toolbar = getattr(self, "_main_toolbar", None)
+        style = (
+            Qt.ToolButtonStyle.ToolButtonIconOnly
+            if narrow
+            else Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        toolbar_actions = (
+            self._act_compose,
+            self._act_refresh,
+            self._act_preferences,
+            self._act_manage_accounts,
+        )
+        for action in toolbar_actions:
+            full = action.property("pyq_full_text")
+            if full:
+                action.setText(full)
+            if toolbar is not None:
+                btn = toolbar.widgetForAction(action)
+                if isinstance(btn, QToolButton):
+                    btn.setToolButtonStyle(style)
+
+    def _restore_tray_action_labels(self) -> None:
+        """Restaura textos completos de acciones compartidas con la bandeja."""
+        for action in getattr(self, "_tray_menu_actions", ()):
+            full = action.property("pyq_full_text")
+            if full:
+                action.setText(full)
+
+    def _on_tray_menu_hidden(self) -> None:
+        self._apply_toolbar_labels(self._ui_narrow)
 
     def _page_size(self) -> int:
         return max(10, self._prefs.page_size)
@@ -539,89 +711,143 @@ class MainWindow(QMainWindow):
         aparezcan automáticamente en ambos sitios.
         """
         self._act_show = QAction("Mostrar ventana", self)
+        self._setup_menu_action(self._act_show, "window", "Mostrar ventana")
         self._act_show.triggered.connect(self.show_main_window)
 
         self._act_tray_inbox = QAction("Bandeja de entrada", self)
+        self._setup_menu_action(self._act_tray_inbox, "inbox", "Bandeja de entrada")
         self._act_tray_inbox.triggered.connect(self._open_tray_inbox)
 
         self._act_quit = QAction("Salir", self)
+        self._setup_menu_action(self._act_quit, "quit", "Salir")
         self._act_quit.setShortcut("Ctrl+Q")
         self._act_quit.triggered.connect(self._quit_application)
 
         self._act_add_account = QAction("Añadir cuenta…", self)
+        self._setup_menu_action(self._act_add_account, "user-plus", "Añadir cuenta…")
         self._act_add_account.triggered.connect(self._add_account)
 
-        self._act_manage_accounts = QAction("Gestionar cuentas…", self)
+        self._act_manage_accounts = QAction("Cuentas", self)
+        self._setup_menu_action(
+            self._act_manage_accounts, "users", "Cuentas", toolbar_compact=""
+        )
+        self._act_manage_accounts.setToolTip("Gestionar cuentas de correo")
         self._act_manage_accounts.triggered.connect(self._manage_accounts)
 
-        self._act_refresh = QAction("Actualizar", self)
-        self._act_refresh.setShortcut("F5")
-        self._act_refresh.triggered.connect(self._refresh)
-
         self._act_compose = QAction("Redactar", self)
+        self._setup_menu_action(
+            self._act_compose, "compose", "Redactar", toolbar_compact=""
+        )
         self._act_compose.setShortcut("Ctrl+N")
+        self._act_compose.setToolTip("Redactar nuevo correo (Ctrl+N)")
         self._act_compose.triggered.connect(lambda: self._compose())
 
-        self._act_reply = QAction("↩ Responder", self)
+        self._act_refresh = QAction("Actualizar", self)
+        self._setup_menu_action(
+            self._act_refresh, "refresh", "Actualizar", toolbar_compact=""
+        )
+        self._act_refresh.setShortcut("F5")
+        self._act_refresh.setToolTip("Actualizar carpeta actual (F5)")
+        self._act_refresh.triggered.connect(self._refresh)
+
+        self._act_reply = QAction("Responder", self)
+        self._setup_menu_action(self._act_reply, "reply", "Responder")
         self._act_reply.setShortcut("Ctrl+R")
         self._act_reply.setToolTip("Responder al remitente (Ctrl+R)")
         self._act_reply.triggered.connect(self._reply)
 
-        self._act_reply_all = QAction("↩↩ Responder a todos", self)
+        self._act_reply_all = QAction("Responder a todos", self)
+        self._setup_menu_action(
+            self._act_reply_all, "reply-all", "Responder a todos"
+        )
         self._act_reply_all.setShortcut("Ctrl+Shift+R")
-        self._act_reply_all.setToolTip("Responder a todos los destinatarios (Ctrl+Shift+R)")
+        self._act_reply_all.setToolTip(
+            "Responder a todos los destinatarios (Ctrl+Shift+R)"
+        )
         self._act_reply_all.triggered.connect(self._reply_all)
 
-        self._act_forward = QAction("→ Reenviar", self)
+        self._act_forward = QAction("Reenviar", self)
+        self._setup_menu_action(self._act_forward, "forward", "Reenviar")
         self._act_forward.setShortcut("Ctrl+L")
         self._act_forward.setToolTip("Reenviar este mensaje (Ctrl+L)")
         self._act_forward.triggered.connect(self._forward)
 
         self._act_delete = QAction("Eliminar", self)
+        self._setup_menu_action(self._act_delete, "trash", "Eliminar")
         self._act_delete.setShortcut("Delete")
-        self._act_delete.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._act_delete.setShortcutContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
         self._act_delete.setToolTip("Eliminar los mensajes seleccionados (Supr)")
         self._act_delete.triggered.connect(self._delete_message)
 
         self._act_move_messages = QAction("Mover a otra carpeta…", self)
+        self._setup_menu_action(
+            self._act_move_messages, "folder", "Mover a otra carpeta…"
+        )
         self._act_move_messages.setShortcut("Ctrl+Shift+M")
         self._act_move_messages.triggered.connect(self._show_move_messages_dialog)
 
         self._act_new_folder = QAction("Nueva carpeta…", self)
+        self._setup_menu_action(self._act_new_folder, "folder", "Nueva carpeta…")
         self._act_new_folder.triggered.connect(lambda: self._create_folder())
 
         self._act_new_subfolder = QAction("Nueva subcarpeta…", self)
+        self._setup_menu_action(
+            self._act_new_subfolder, "folder", "Nueva subcarpeta…"
+        )
         self._act_new_subfolder.triggered.connect(self._create_subfolder)
 
         self._act_mark_important = QAction("Marcar como importante", self)
+        self._setup_menu_action(
+            self._act_mark_important, "star", "Marcar como importante"
+        )
         self._act_mark_important.triggered.connect(
             lambda: self._mark_selected_category(MailCategory.IMPORTANT)
         )
 
         self._act_mark_spam = QAction("Marcar como spam", self)
+        self._setup_menu_action(self._act_mark_spam, "spam", "Marcar como spam")
         self._act_mark_spam.triggered.connect(
             lambda: self._mark_selected_category(MailCategory.SPAM)
         )
 
         self._act_mark_normal = QAction("Marcar como normal", self)
+        self._setup_menu_action(
+            self._act_mark_normal, "mail", "Marcar como normal"
+        )
         self._act_mark_normal.triggered.connect(
             lambda: self._mark_selected_category(MailCategory.NORMAL)
         )
 
         self._act_about = QAction("Acerca de…", self)
+        self._setup_menu_action(self._act_about, "mail", "Acerca de…")
         self._act_about.triggered.connect(self._show_about)
 
-        self._act_preferences = QAction("Preferencias…", self)
+        self._act_preferences = QAction("Preferencias", self)
+        self._setup_menu_action(
+            self._act_preferences, "settings", "Preferencias", toolbar_compact=""
+        )
         self._act_preferences.setShortcut("Ctrl+,")
+        self._act_preferences.setToolTip("Preferencias de la aplicación (Ctrl+,)")
         self._act_preferences.triggered.connect(self._show_preferences)
 
         self._act_unsubscribe = QAction("Darse de baja del boletín", self)
+        self._setup_menu_action(
+            self._act_unsubscribe, "mail", "Darse de baja del boletín"
+        )
         self._act_unsubscribe.triggered.connect(self._unsubscribe_current_message)
 
         self._act_export_eml = QAction("Exportar como .eml…", self)
+        self._setup_menu_action(
+            self._act_export_eml, "mail", "Exportar como .eml…"
+        )
         self._act_export_eml.triggered.connect(self._export_selected_eml)
 
         self._act_export_folder = QAction("Exportar carpeta a .mbox…", self)
+        self._setup_menu_action(
+            self._act_export_folder, "folder", "Exportar carpeta a .mbox…"
+        )
         self._act_export_folder.triggered.connect(self._export_current_folder_mbox)
 
         for action in (
@@ -637,19 +863,34 @@ class MainWindow(QMainWindow):
         ):
             action.setEnabled(False)
 
-        self.addAction(self._act_delete)
+    def _exec_modal(self, dialog: QDialog) -> int:
+        """Muestra un diálogo modal pausando sync en segundo plano."""
+        pause_bg_sync = (
+            self._prefs.background_sync_enabled and bool(self.accounts)
+        )
+        if pause_bg_sync:
+            self._background_sync.stop()
+        try:
+            return dialog.exec()
+        finally:
+            if pause_bg_sync and self.accounts:
+                self._background_sync.set_accounts(
+                    self.accounts,
+                    self.current_account.id if self.current_account else None,
+                )
+                self._background_sync.start()
 
     def _ensure_reader_actions_layout(self) -> None:
-        """Crea el layout en dos filas (evita que los botones se compriman)."""
+        """Dos filas de botones que reparten el ancho disponible (sin scroll)."""
         if hasattr(self, "_reader_row1"):
             return
         outer = QVBoxLayout(self.reader_actions)
         outer.setContentsMargins(0, 4, 0, 8)
         outer.setSpacing(6)
         self._reader_row1 = QHBoxLayout()
-        self._reader_row1.setSpacing(8)
+        self._reader_row1.setSpacing(6)
         self._reader_row2 = QHBoxLayout()
-        self._reader_row2.setSpacing(8)
+        self._reader_row2.setSpacing(6)
         outer.addLayout(self._reader_row1)
         outer.addLayout(self._reader_row2)
 
@@ -661,13 +902,13 @@ class MainWindow(QMainWindow):
                 widget.deleteLater()
 
     def _make_reader_button(
-        self, action: QAction, label: str, style: str
+        self, action: QAction, label: str, role: str
     ) -> QPushButton:
         btn = QPushButton(label)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(style)
+        mark_role(btn, role)
         btn.setEnabled(action.isEnabled())
-        btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         btn.clicked.connect(action.trigger)
         btn.setToolTip(action.toolTip() or action.text())
         return btn
@@ -678,31 +919,27 @@ class MainWindow(QMainWindow):
         self._clear_layout(self._reader_row1)
         self._clear_layout(self._reader_row2)
         self._reader_buttons.clear()
+        row1_specs, row2_specs = self._reader_action_specs()
+        self._reader_label_mode = self._reader_button_label_mode()
 
-        row1_specs = (
-            (self._act_reply, "↩ Responder", _READER_BTN_PRIMARY),
-            (self._act_reply_all, "↩↩ Responder a todos", _READER_BTN_PRIMARY),
-            (self._act_forward, "→ Reenviar", _READER_BTN_SECONDARY),
-            (self._act_delete, "🗑 Eliminar", _READER_BTN_DANGER),
-        )
-        row2_specs = (
-            (self._act_mark_important, "★ Importante", _READER_BTN_CATEGORY),
-            (self._act_mark_spam, "⚠ Spam", _READER_BTN_CATEGORY),
-            (self._act_mark_normal, "● Normal", _READER_BTN_CATEGORY),
-            (self._act_unsubscribe, "✉ Dar de baja", _READER_BTN_SECONDARY),
-        )
-
-        for action, label, style in row1_specs:
-            btn = self._make_reader_button(action, label, style)
+        for action, label, role in row1_specs:
+            btn = self._make_reader_button(action, label, role)
             self._reader_row1.addWidget(btn)
             self._reader_buttons.append(btn)
-        self._reader_row1.addStretch()
 
-        for action, label, style in row2_specs:
-            btn = self._make_reader_button(action, label, style)
+        for action, label, role in row2_specs:
+            btn = self._make_reader_button(action, label, role)
             self._reader_row2.addWidget(btn)
             self._reader_buttons.append(btn)
-        self._reader_row2.addStretch()
+        self._sync_reader_actions_height()
+
+    def _sync_reader_actions_height(self) -> None:
+        """Reserva altura suficiente para las dos filas de botones del lector."""
+        if not hasattr(self, "reader_actions"):
+            return
+        self.reader_actions.adjustSize()
+        height = max(self.reader_actions.sizeHint().height(), 96)
+        self.reader_actions.setFixedHeight(height)
 
     def _detach_translate_worker(self) -> None:
         self._pending_translate_uid = None
@@ -734,22 +971,17 @@ class MainWindow(QMainWindow):
     def _on_message_selection_changed(self) -> None:
         selected = self._selected_message_uid()
         if self._pending_fetch_uid and selected != self._pending_fetch_uid:
+            self._fetch_generation += 1
             self._pending_fetch_uid = None
-            if self._message_fetch_worker and self._message_fetch_worker.isRunning():
-                try:
-                    self._message_fetch_worker.signals.finished.disconnect(
-                        self._display_message
-                    )
-                    self._message_fetch_worker.signals.error.disconnect(
-                        self._on_fetch_error
-                    )
-                except (RuntimeError, TypeError):
-                    pass
         self._update_message_actions()
+        if self._pending_fetch_uid and selected == self._pending_fetch_uid:
+            return
         self._show_selection_preview()
 
     def _show_selection_preview(self) -> None:
         """Muestra metadatos del listado sin descargar el cuerpo (doble clic para abrir)."""
+        if self._pending_fetch_uid:
+            return
         uid = self._selected_message_uid()
         if not uid:
             return
@@ -786,10 +1018,14 @@ class MainWindow(QMainWindow):
         if has_row:
             if len(selected) == 1:
                 tip = "Eliminar el mensaje seleccionado (Supr)"
-                delete_label = "🗑 Eliminar"
+                delete_label = "🗑" if self._ui_narrow else "🗑 Eliminar"
             else:
                 tip = f"Eliminar {len(selected)} mensajes seleccionados (Supr)"
-                delete_label = f"🗑 Eliminar ({len(selected)})"
+                delete_label = (
+                    "🗑"
+                    if self._ui_narrow
+                    else f"🗑 Eliminar ({len(selected)})"
+                )
             self._act_delete.setToolTip(tip)
             if hasattr(self, "btn_delete_selected"):
                 self.btn_delete_selected.setText(delete_label)
@@ -895,11 +1131,6 @@ class MainWindow(QMainWindow):
         self._update_message_actions()
 
         menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { padding: 4px; }"
-            "QMenu::item { padding: 6px 28px 6px 16px; }"
-            "QMenu::item:selected { background-color: #2d7dd2; color: white; }"
-        )
 
         loaded = self._message_loaded_for_selection()
         open_action = menu.addAction("Abrir mensaje")
@@ -975,19 +1206,25 @@ class MainWindow(QMainWindow):
 
     def _build_tray_menu(self) -> QMenu:
         """Construye el menú contextual de la bandeja del sistema."""
-        menu = QMenu(self)
-        menu.aboutToShow.connect(self._update_tray_menu)
+        # Menú independiente del árbol de la ventana (evita conflictos con clic derecho).
+        if not hasattr(self, "_tray_menu") or self._tray_menu is None:
+            self._tray_menu = QMenu()
+            self._tray_menu.aboutToShow.connect(self._update_tray_menu)
+            self._tray_menu.aboutToHide.connect(self._on_tray_menu_hidden)
+        else:
+            self._tray_menu.clear()
+        menu = self._tray_menu
         menu.addAction(self._act_show)
         menu.addAction(self._act_tray_inbox)
         menu.addSeparator()
 
-        cuenta_menu = menu.addMenu("Cuenta")
+        cuenta_menu = menu.addMenu(action_icon("account"), "Cuenta")
         cuenta_menu.addAction(self._act_add_account)
         cuenta_menu.addAction(self._act_manage_accounts)
         cuenta_menu.addSeparator()
         cuenta_menu.addAction(self._act_refresh)
 
-        correo_menu = menu.addMenu("Correo")
+        correo_menu = menu.addMenu(action_icon("compose"), "Correo")
         correo_menu.addAction(self._act_compose)
         correo_menu.addAction(self._act_reply)
         correo_menu.addAction(self._act_reply_all)
@@ -1002,14 +1239,32 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction(self._act_preferences)
         menu.addAction(self._act_quit)
+
+        self._tray_menu_actions = (
+            self._act_show,
+            self._act_tray_inbox,
+            self._act_add_account,
+            self._act_manage_accounts,
+            self._act_refresh,
+            self._act_compose,
+            self._act_reply,
+            self._act_reply_all,
+            self._act_forward,
+            self._act_delete,
+            self._act_mark_important,
+            self._act_mark_spam,
+            self._act_mark_normal,
+            self._act_preferences,
+            self._act_quit,
+        )
         return menu
 
     def _update_tray_menu(self) -> None:
         """Actualiza el menú de bandeja según la cuenta seleccionada."""
+        self._restore_tray_action_labels()
         if self.current_account:
-            self._act_tray_inbox.setText(
-                f"Bandeja de entrada — {self.current_account.email}"
-            )
+            inbox_label = f"Bandeja de entrada — {self.current_account.email}"
+            self._act_tray_inbox.setText(inbox_label)
             self._act_tray_inbox.setEnabled(True)
         else:
             self._act_tray_inbox.setText("Bandeja de entrada")
@@ -1059,18 +1314,151 @@ class MainWindow(QMainWindow):
 
     def show_main_window(self) -> None:
         """Restaura y enfoca la ventana principal."""
-        self.showNormal()
+        if not self.isVisible():
+            self.show()
+        if self.isMinimized():
+            self.showNormal()
         self.raise_()
         self.activateWindow()
 
-    def _quit_application(self) -> None:
-        """Cierra la aplicación por completo (menú Archivo / bandeja)."""
-        self._quitting = True
+    def _configure_chrome_context_menus(self) -> None:
+        """Evita menús contextuales del sistema en la barra de menús y marcos."""
+        prevent = Qt.ContextMenuPolicy.PreventContextMenu
+        prevent_context_menu(self)
+        central = self.centralWidget()
+        if central is not None:
+            central.setContextMenuPolicy(prevent)
+        self.menuBar().setContextMenuPolicy(prevent)
+        self.status_bar.setContextMenuPolicy(prevent)
+        for toolbar in self.findChildren(QToolBar):
+            toolbar.setContextMenuPolicy(prevent)
+
+    def _track_worker(self, worker: QThread) -> None:
+        """Registra un hilo y lo libera al terminar (evita acumulación de QThread)."""
+        if worker in self._workers:
+            return
+        self._workers.append(worker)
+        worker.finished.connect(lambda w=worker: self._release_worker(w))
+
+    def _release_worker(self, worker: QThread) -> None:
+        try:
+            self._workers.remove(worker)
+        except ValueError:
+            return
+        worker.deleteLater()
+
+    def _disconnect_thread_signals(self, thread: QThread | None) -> None:
+        """Evita deadlock al esperar hilos desde el hilo de la interfaz."""
+        if thread is None:
+            return
+        signals = getattr(thread, "signals", None)
+        if signals is not None:
+            for name in (
+                "finished",
+                "error",
+                "batch_ready",
+                "progress",
+            ):
+                if not hasattr(signals, name):
+                    continue
+                try:
+                    getattr(signals, name).disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+        try:
+            thread.finished.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+
+    def _stop_thread(self, thread: QThread | None, *, wait_ms: int = 500) -> None:
+        if thread is None or not thread.isRunning():
+            return
+        self._disconnect_thread_signals(thread)
+        if wait_ms <= 0:
+            thread.terminate()
+            return
+        thread.wait(wait_ms)
+        if thread.isRunning():
+            thread.terminate()
+            thread.wait(300)
+
+    def _shutdown(self, *, fast: bool = False) -> None:
+        """Detiene hilos y cierra conexiones antes de salir."""
+        wait_ms = 0 if fast else 2000
+
+        self._sync_generation += 1
+        if self._sync_worker and self._sync_worker.isRunning():
+            self._sync_worker.cancel()
+            self._stop_thread(self._sync_worker, wait_ms=wait_ms)
+        self._sync_worker = None
+        self.sync_progress.setVisible(False)
+        self.btn_cancel_sync.setVisible(False)
+
+        self._cancel_message_fetch()
+        self._folder_unread_timer.stop()
+        self._background_sync.stop(wait_ms=0 if fast else 5000)
+
+        for attr in (
+            "_load_folder_worker",
+            "_connect_worker",
+            "_message_fetch_worker",
+            "_enhance_worker",
+            "_translate_worker",
+            "_folder_unread_worker",
+        ):
+            self._stop_thread(getattr(self, attr, None), wait_ms=wait_ms)
+            setattr(self, attr, None)
+
+        for worker in list(self._workers):
+            self._stop_thread(worker, wait_ms=wait_ms)
+            self._release_worker(worker)
+        self._workers.clear()
+
+        try:
+            self._background_sync.signals.new_mail.disconnect(self._on_background_new_mail)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            self._background_sync.signals.folder_updated.disconnect(
+                self._on_background_folder_updated
+            )
+        except (RuntimeError, TypeError):
+            pass
+
         if self.mail_service:
-            self.mail_service.disconnect()
+            if not fast:
+                self.mail_service.disconnect()
+            self.mail_service = None
+        if hasattr(self, "message_viewer") and not fast:
+            self.message_viewer.shutdown_engine()
         if self._tray:
             self._tray.hide()
-        QApplication.quit()
+
+    def _exit_process(self, code: int = 0) -> None:
+        """Termina el proceso de inmediato (devuelve el control a la terminal)."""
+        import os
+
+        os._exit(code)
+
+    def _finalize_process_exit(self) -> None:
+        """Respaldo si se usa QApplication.quit() sin _exit_process."""
+        self._exit_process(0)
+
+    def _quit_application(self) -> None:
+        """Cierra la aplicación por completo (menú Archivo / bandeja)."""
+        import os
+
+        if self._quitting:
+            os._exit(0)
+        self._quitting = True
+        try:
+            if self._tray:
+                self._tray.hide()
+            self.hide()
+            self._shutdown(fast=True)
+        except Exception:
+            pass
+        os._exit(0)
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("Archivo")
@@ -1110,9 +1498,13 @@ class MainWindow(QMainWindow):
         ayuda_menu = self.menuBar().addMenu("Ayuda")
         ayuda_menu.addAction(self._act_about)
 
-    def _show_preferences(self) -> None:
-        dialog = PreferencesDialog(self._prefs, parent=self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+    def _show_preferences(self, initial_tab: str | None = None) -> None:
+        dialog = PreferencesDialog(
+            self._prefs,
+            parent=self,
+            initial_tab=initial_tab,
+        )
+        if self._exec_modal(dialog) != QDialog.DialogCode.Accepted:
             return
         self._prefs = dialog.get_preferences()
         save_preferences(self._prefs)
@@ -1121,34 +1513,52 @@ class MainWindow(QMainWindow):
             self.accounts, self.current_account.id if self.current_account else None
         )
         self._background_sync.start()
+        self._apply_theme()
         self._apply_list_filters()
+        self._update_compact_ui(self.width())
+
+    def _apply_theme(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            apply_app_theme(app, self._prefs.theme)
+        apply_message_viewer_theme(self.message_viewer, self._prefs.theme)
+        mark_object(self.folder_tree, "pyqFolderTree")
+        mark_object(self.message_table, "pyqMessageTable")
+        mark_role(self.quota_label, "hint")
+        mark_role(self.meta_label, "meta")
+        self._build_reader_actions()
+        self._render_message_table()
+
+    def _category_colors(self) -> dict:
+        return category_colors(self._prefs.theme)
+
+    def _text_color(self) -> QColor:
+        return text_color(self._prefs.theme)
+
+    def _current_sort_key(self) -> str:
+        sort_map = {
+            0: "date_desc",
+            1: "date_asc",
+            2: "sender",
+            3: "subject",
+        }
+        return sort_map.get(self.sort_combo.currentIndex(), self._prefs.sort_by)
 
     def _show_about(self) -> None:
         """Abre el diálogo con información del programa."""
         dialog = AboutDialog(parent=self)
-        dialog.exec()
+        self._exec_modal(dialog)
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Principal")
+        toolbar.setMovable(False)
+        self._main_toolbar = toolbar
         self.addToolBar(toolbar)
-
-        compose_btn = QAction("✉ Redactar", self)
-        compose_btn.triggered.connect(lambda: self._compose())
-        toolbar.addAction(compose_btn)
-
-        refresh_btn = QAction("↻ Actualizar", self)
-        refresh_btn.triggered.connect(self._refresh)
-        toolbar.addAction(refresh_btn)
-
+        toolbar.addAction(self._act_compose)
+        toolbar.addAction(self._act_refresh)
         toolbar.addSeparator()
-
-        prefs_btn = QAction("⚙ Preferencias", self)
-        prefs_btn.triggered.connect(self._show_preferences)
-        toolbar.addAction(prefs_btn)
-
-        account_btn = QAction("👤 Cuentas", self)
-        account_btn.triggered.connect(self._manage_accounts)
-        toolbar.addAction(account_btn)
+        toolbar.addAction(self._act_preferences)
+        toolbar.addAction(self._act_manage_accounts)
 
     def _show_welcome(self) -> None:
         self._current_message = None
@@ -1223,8 +1633,12 @@ class MainWindow(QMainWindow):
         return True
 
     def _add_account(self) -> None:
-        dialog = AccountDialog(self.settings, parent=self)
-        if dialog.exec() != AccountDialog.DialogCode.Accepted:
+        dialog = AccountDialog(
+            self.settings,
+            parent=self,
+            on_configure_oauth=lambda: self._show_preferences(initial_tab="oauth"),
+        )
+        if self._exec_modal(dialog) != AccountDialog.DialogCode.Accepted:
             return
         account, password = dialog.get_result()
         if not self._save_account(account, password):
@@ -1241,8 +1655,9 @@ class MainWindow(QMainWindow):
             self.accounts,
             self.current_account.id if self.current_account else None,
             parent=self,
+            on_configure_oauth=lambda: self._show_preferences(initial_tab="oauth"),
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        if self._exec_modal(dialog) != QDialog.DialogCode.Accepted:
             self.accounts = self.settings.load_accounts()
             if self.current_account and self.current_account.id not in {
                 a.id for a in self.accounts
@@ -1271,22 +1686,22 @@ class MainWindow(QMainWindow):
         else:
             self._refresh_account_combo()
 
-    def _connect_account(self, account: MailAccount) -> None:
+    def _connect_account(self, account: MailAccount, *, block_ui: bool = True) -> None:
         """Inicia la conexión IMAP en segundo plano para la cuenta indicada."""
-        if account.auth_method == AuthMethod.OAUTH2.value:
-            QMessageBox.information(
-                self,
-                "OAuth2",
-                oauth_not_configured_message(
-                    detect_oauth_provider(account.email, account.imap_host)
-                ),
-            )
-            return
-        password = self.settings.get_password(account.id)
-        if not password:
-            QMessageBox.warning(
-                self, "Sin contraseña", "No hay contraseña guardada para esta cuenta."
-            )
+        auth_secret = self.settings.get_auth_secret(account)
+        if not auth_secret:
+            if account.auth_method == AuthMethod.OAUTH2.value:
+                QMessageBox.warning(
+                    self,
+                    "OAuth2",
+                    oauth_not_configured_message(
+                        detect_oauth_provider(account.email, account.imap_host)
+                    ),
+                )
+            else:
+                QMessageBox.warning(
+                    self, "Sin contraseña", "No hay contraseña guardada para esta cuenta."
+                )
             return
 
         self._cancel_sync()
@@ -1294,33 +1709,78 @@ class MainWindow(QMainWindow):
             self.mail_service.disconnect()
             self.mail_service = None
 
+        self._connect_generation += 1
+        connect_gen = self._connect_generation
+
         self.current_account = account
         self.settings.set_last_account_id(account.id)
         self._refresh_account_combo(account.id)
         self.status_bar.showMessage(f"Conectando a {account.email}…")
-        self.setEnabled(False)
+        if block_ui:
+            self.setEnabled(False)
 
         worker = ConnectWorker(
-            account, password, self.settings.get_classifier()
+            account, auth_secret, self.settings.get_classifier()
         )
-        worker.signals.finished.connect(self._on_connected)
-        worker.signals.error.connect(self._on_connect_error)
+        worker.signals.finished.connect(
+            lambda result, g=connect_gen: self._on_connected(result, g)
+        )
+        worker.signals.error.connect(
+            lambda message, g=connect_gen: self._on_connect_error(message, g)
+        )
         worker.start()
-        self._workers.append(worker)
+        self._connect_worker = worker
+        self._track_worker(worker)
 
-    def _on_connected(self, result) -> None:
-        self.setEnabled(True)
+    def _on_connected(self, result, generation: int | None = None) -> None:
         service, folders = result
+        if generation is not None and generation != self._connect_generation:
+            service.disconnect()
+            return
+        self.setEnabled(True)
         self.mail_service = service
         self._folder_names = [f.name for f in folders]
         self._refresh_folder_tree(select_folder="INBOX")
         self._refresh_folder_unread_counts()
         self._refresh_storage_quota()
 
-        folder = selected_folder_path(self.folder_tree) or "INBOX"
+        folder = selected_folder_path(self.folder_tree) or self._current_folder or "INBOX"
         self._start_folder_sync(folder)
-        self._background_sync.set_accounts(self.accounts, self.current_account.id if self.current_account else None)
+        self._background_sync.set_accounts(
+            self.accounts, self.current_account.id if self.current_account else None
+        )
         self._background_sync.start()
+
+    def _preload_cached_folder(self, account_id: str, folder: str) -> None:
+        """Muestra mensajes en caché antes de que termine la conexión IMAP."""
+        self._current_folder = folder
+        self._current_page = 0
+        self._all_messages = []
+        self._render_message_table()
+        count = self.mail_cache.folder_count(account_id, folder)
+        if count:
+            self.status_bar.showMessage(
+                f"Cargando {count:,} mensajes en caché…".replace(",", ".")
+            )
+        if self._load_folder_worker and self._load_folder_worker.isRunning():
+            self._load_folder_worker.wait(2000)
+        worker = LoadFolderWorker(self.mail_cache, account_id, folder)
+        self._load_folder_worker = worker
+        worker.signals.finished.connect(self._on_startup_cache_preloaded)
+        worker.signals.error.connect(lambda _msg: None)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _on_startup_cache_preloaded(self, summaries: list[MailSummary]) -> None:
+        if not self.current_account or not summaries:
+            return
+        self._all_messages = summaries
+        self._render_message_table()
+        self.status_bar.showMessage(
+            f"{len(summaries):,} en caché — conectando y buscando correo nuevo…".replace(
+                ",", "."
+            )
+        )
 
     def _refresh_folder_tree(self, select_folder: str | None = None) -> None:
         self.folder_tree.blockSignals(True)
@@ -1333,18 +1793,32 @@ class MainWindow(QMainWindow):
         self.folder_tree.blockSignals(False)
 
     def _refresh_folder_unread_counts(self) -> None:
+        """Programa la actualización de no leídos (agrupa peticiones seguidas)."""
         if not self.current_account or not self._folder_names:
             return
-        password = self.settings.get_password(self.current_account.id)
-        if not password:
+        self._folder_unread_timer.start()
+
+    def _run_folder_unread_refresh(self) -> None:
+        if not self.current_account or not self._folder_names:
             return
+        auth_secret = self.settings.get_auth_secret(self.current_account)
+        if not auth_secret:
+            return
+        if self._folder_unread_worker and self._folder_unread_worker.isRunning():
+            try:
+                self._folder_unread_worker.signals.finished.disconnect(
+                    self._on_folder_unread_counts
+                )
+            except (RuntimeError, TypeError):
+                pass
         worker = FolderUnreadWorker(
-            self.current_account, password, self._folder_names
+            self.current_account, auth_secret, self._folder_names
         )
         worker.signals.finished.connect(self._on_folder_unread_counts)
         worker.signals.error.connect(lambda _m: None)
         worker.start()
-        self._workers.append(worker)
+        self._folder_unread_worker = worker
+        self._track_worker(worker)
 
     def _on_folder_unread_counts(self, counts: dict) -> None:
         self._folder_unread = counts
@@ -1405,7 +1879,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self._on_folder_emptied)
         worker.signals.error.connect(lambda m: self._on_sync_error(m))
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_folder_emptied(self, payload) -> None:
         folder, count = payload
@@ -1460,7 +1934,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self._on_folder_deleted)
         worker.signals.error.connect(self._on_folder_delete_error)
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_folder_deleted(self, payload) -> None:
         deleted_paths, folders = payload
@@ -1523,6 +1997,9 @@ class MainWindow(QMainWindow):
             return
 
         self._cancel_sync()
+        if self._load_folder_worker and self._load_folder_worker.isRunning():
+            self._load_folder_worker.wait(2000)
+        self._load_folder_worker = None
         generation = self._sync_generation
         self._cancel_message_fetch()
         self._current_folder = folder
@@ -1539,17 +2016,32 @@ class MainWindow(QMainWindow):
         self.search_edit.clear()
         self.search_edit.blockSignals(False)
 
-        cached = self.mail_cache.load_folder(self.current_account.id, folder)
-        if cached:
-            self._all_messages = cached
-            self._render_message_table()
+        self._all_messages = []
+        self._render_message_table()
+        count = self.mail_cache.folder_count(self.current_account.id, folder)
+        if count:
             self.status_bar.showMessage(
-                f"{len(cached)} en caché — sincronizando {folder}…"
+                f"Cargando {count:,} mensajes en caché — sincronizando {folder}…".replace(",", ".")
             )
         else:
-            self._all_messages = []
-            self._render_message_table()
             self.status_bar.showMessage(f"Sincronizando {folder}…")
+
+        load_worker = LoadFolderWorker(
+            self.mail_cache,
+            self.current_account.id,
+            folder,
+        )
+        self._load_folder_worker = load_worker
+        load_worker.signals.finished.connect(
+            lambda summaries, g=generation, f=folder: self._on_folder_cache_loaded(
+                summaries, g, f
+            )
+        )
+        load_worker.signals.error.connect(
+            lambda msg, g=generation, f=folder: self._on_folder_cache_error(msg, g, f)
+        )
+        load_worker.start()
+        self._track_worker(load_worker)
 
         self.sync_progress.setVisible(True)
         self.sync_progress.setValue(0)
@@ -1580,10 +2072,11 @@ class MainWindow(QMainWindow):
         )
         worker.start()
         self._sync_worker = worker
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _cancel_message_fetch(self) -> None:
         """Cancela descargas de mensaje pendientes (p. ej. al cambiar de carpeta)."""
+        self._fetch_generation += 1
         self._pending_fetch_uid = None
         self._message_fetch_worker = None
         self._enhance_generation += 1
@@ -1593,25 +2086,50 @@ class MainWindow(QMainWindow):
         self._detach_translate_worker()
 
     def _cancel_sync(self) -> None:
+        self._sync_generation += 1
         if self._sync_worker and self._sync_worker.isRunning():
             self._sync_worker.cancel()
+            self._stop_thread(self._sync_worker, wait_ms=2000)
         self._sync_worker = None
-        self._sync_generation += 1
         self.sync_progress.setVisible(False)
         self.btn_cancel_sync.setVisible(False)
 
     def _sync_is_current(self, generation: int, folder: str) -> bool:
         return generation == self._sync_generation and folder == self._current_folder
 
+    def _on_folder_cache_loaded(
+        self, summaries: list[MailSummary], generation: int, folder: str
+    ) -> None:
+        if not self._sync_is_current(generation, folder):
+            return
+        self._all_messages = summaries
+        self._render_message_table()
+        if summaries:
+            self.status_bar.showMessage(
+                f"{len(summaries):,} en caché — sincronizando {folder}…".replace(",", ".")
+            )
+
+    def _on_folder_cache_error(
+        self, message: str, generation: int, folder: str
+    ) -> None:
+        if not self._sync_is_current(generation, folder):
+            return
+        self.status_bar.showMessage(f"Error al leer caché local: {message}")
+
     def _on_sync_batch(self, payload, generation: int, folder: str) -> None:
         if not self._sync_is_current(generation, folder):
             return
-        _batch, done, total = payload
+        batch, done, total = payload
+        if batch:
+            by_uid = {m.uid: i for i, m in enumerate(self._all_messages)}
+            for summary in batch:
+                idx = by_uid.get(summary.uid)
+                if idx is not None:
+                    self._all_messages[idx] = summary
+                else:
+                    self._all_messages.append(summary)
+                    by_uid[summary.uid] = len(self._all_messages) - 1
         self._sync_new_total = total
-        if self.current_account:
-            self._all_messages = self.mail_cache.load_folder(
-                self.current_account.id, self._current_folder
-            )
         self._on_sync_progress(done, total, generation, folder)
         if self._current_page == 0:
             self._render_message_table()
@@ -1684,15 +2202,11 @@ class MainWindow(QMainWindow):
         self.sync_progress.setVisible(False)
         self.btn_cancel_sync.setVisible(False)
         self.status_bar.showMessage("Error de sincronización")
-        if self.mail_service and self.current_account:
-            try:
-                self.mail_service.ensure_connected()
-                self.mail_service.select_folder(self._current_folder)
-            except Exception:
-                pass
         QMessageBox.warning(self, "Error de sincronización", message)
 
-    def _on_connect_error(self, message: str) -> None:
+    def _on_connect_error(self, message: str, generation: int | None = None) -> None:
+        if generation is not None and generation != self._connect_generation:
+            return
         self.setEnabled(True)
         self.status_bar.showMessage("Error de conexión")
         QMessageBox.critical(
@@ -1710,6 +2224,8 @@ class MainWindow(QMainWindow):
         self._start_folder_sync(folder)
 
     def _apply_list_filters(self) -> None:
+        if not hasattr(self, "message_table"):
+            return
         self._current_page = 0
         self._render_message_table()
 
@@ -1717,16 +2233,16 @@ class MainWindow(QMainWindow):
         """Aplica el filtro de categoría y vuelve a la primera página."""
         self._apply_list_filters()
 
-    def _total_pages(self) -> int:
-        total = len(self._filtered_messages())
-        if total == 0:
+    def _total_pages_for(self, total_filtered: int) -> int:
+        if total_filtered == 0:
             return 1
         page_size = self._page_size()
-        return (total + page_size - 1) // page_size
+        return (total_filtered + page_size - 1) // page_size
 
-    def _paginated_messages(self) -> list[MailSummary]:
+    def _paginated_slice(
+        self, filtered: list[MailSummary]
+    ) -> list[MailSummary]:
         """Devuelve solo los mensajes de la página actual."""
-        filtered = self._filtered_messages()
         page_size = self._page_size()
         start = self._current_page * page_size
         return filtered[start : start + page_size]
@@ -1737,12 +2253,14 @@ class MainWindow(QMainWindow):
             self._render_message_table()
 
     def _next_page(self) -> None:
-        if self._current_page < self._total_pages() - 1:
+        filtered_count = len(self._filtered_messages())
+        if self._current_page < self._total_pages_for(filtered_count) - 1:
             self._current_page += 1
             self._render_message_table()
 
-    def _update_pagination_controls(self, shown: int, total_filtered: int) -> None:
-        pages = self._total_pages()
+    def _update_pagination_controls(
+        self, shown: int, total_filtered: int, pages: int
+    ) -> None:
         self.page_label.setText(
             f"Página {self._current_page + 1} de {pages}  ({total_filtered} correos)"
         )
@@ -1764,13 +2282,26 @@ class MainWindow(QMainWindow):
         def sort_date(summary: MailSummary) -> datetime:
             return normalize_mail_datetime(summary.date) or datetime.min
 
+        def uid_num(summary: MailSummary) -> int:
+            try:
+                return int(summary.uid)
+            except (TypeError, ValueError):
+                return 0
+
         if sort_by == "date_asc":
-            return sorted(messages, key=sort_date)
+            return sorted(
+                messages,
+                key=lambda m: (sort_date(m), uid_num(m)),
+            )
         if sort_by == "sender":
             return sorted(messages, key=lambda m: (m.sender or "").lower())
         if sort_by == "subject":
             return sorted(messages, key=lambda m: (m.subject or "").lower())
-        return sorted(messages, key=sort_date, reverse=True)
+        return sorted(
+            messages,
+            key=lambda m: (sort_date(m), uid_num(m)),
+            reverse=True,
+        )
 
     def _apply_thread_view(self, messages: list[MailSummary]) -> list[MailSummary]:
         if not self._prefs.thread_view:
@@ -1791,35 +2322,58 @@ class MainWindow(QMainWindow):
 
     def _filtered_messages(self) -> list[MailSummary]:
         """Filtra por categoría, búsqueda, no leídos y orden."""
-        messages = list(self._all_messages)
         choice = self.category_filter.currentText()
         mapping = {
             "Normal": MailCategory.NORMAL,
             "Importante": MailCategory.IMPORTANT,
             "Spam": MailCategory.SPAM,
         }
-        if choice in mapping:
-            target = mapping[choice]
-            messages = [m for m in messages if m.category == target]
-        query = self.search_edit.text().strip().lower()
+        category = mapping.get(choice)
+        query = self.search_edit.text().strip()
+        unread_only = self.unread_only_check.isChecked()
+        sort_by = self._current_sort_key()
+
+        if (
+            query
+            and self.current_account
+            and not self._prefs.thread_view
+        ):
+            messages = self.mail_cache.query_summaries(
+                self.current_account.id,
+                self._current_folder,
+                query=query,
+                category=category.value if category else None,
+                unread_only=unread_only,
+                sort_by=sort_by,
+            )
+            return messages
+
+        messages = list(self._all_messages)
+        if category:
+            messages = [m for m in messages if m.category == category]
         if query:
+            q = query.lower()
             messages = [
                 m
                 for m in messages
-                if query in (m.subject or "").lower()
-                or query in (m.sender or "").lower()
+                if q in (m.subject or "").lower() or q in (m.sender or "").lower()
             ]
-        if self.unread_only_check.isChecked():
+        if unread_only:
             messages = [m for m in messages if not m.seen]
         messages = self._apply_thread_view(messages)
         return self._sort_messages(messages)
 
     def _render_message_table(self) -> None:
         """Pinta la tabla con los mensajes de la página actual."""
+        if not hasattr(self, "message_table"):
+            return
         filtered = self._filtered_messages()
-        if self._current_page >= self._total_pages():
-            self._current_page = max(0, self._total_pages() - 1)
-        messages = self._paginated_messages()
+        pages = self._total_pages_for(len(filtered))
+        if self._current_page >= pages:
+            self._current_page = max(0, pages - 1)
+        messages = self._paginated_slice(filtered)
+        colors = self._category_colors()
+        fg = QBrush(self._text_color())
         self.message_table.blockSignals(True)
         self.message_table.setRowCount(0)
         self._message_uids: list[str] = []
@@ -1843,8 +2397,7 @@ class MainWindow(QMainWindow):
             )
             date_item = QTableWidgetItem(date_str)
 
-            bg = QBrush(CATEGORY_COLORS.get(summary.category, QColor(255, 255, 255)))
-            fg = QBrush(TEXT_COLOR)
+            bg = QBrush(colors.get(summary.category, QColor(255, 255, 255)))
             for item in (category_item, sender_item, subject_item, date_item):
                 item.setBackground(bg)
                 item.setForeground(fg)
@@ -1861,7 +2414,7 @@ class MainWindow(QMainWindow):
 
         self.message_table.clearSelection()
         self.message_table.blockSignals(False)
-        self._update_pagination_controls(len(messages), len(filtered))
+        self._update_pagination_controls(len(messages), len(filtered), pages)
 
         counts = {
             MailCategory.NORMAL: sum(1 for m in self._all_messages if m.category == MailCategory.NORMAL),
@@ -1869,7 +2422,7 @@ class MainWindow(QMainWindow):
             MailCategory.SPAM: sum(1 for m in self._all_messages if m.category == MailCategory.SPAM),
         }
         self.status_bar.showMessage(
-            f"Pág. {self._current_page + 1}/{self._total_pages()} — "
+            f"Pág. {self._current_page + 1}/{pages} — "
             f"{len(filtered)} correos — "
             f"★ {counts[MailCategory.IMPORTANT]} importantes, "
             f"⚠ {counts[MailCategory.SPAM]} spam — "
@@ -1971,7 +2524,9 @@ class MainWindow(QMainWindow):
         if changed:
             self._render_message_table()
 
-    def _on_fetch_error(self, message: str) -> None:
+    def _on_fetch_error(self, message: str, generation: int | None = None) -> None:
+        if generation is not None and generation != self._fetch_generation:
+            return
         if self._pending_fetch_uid is None:
             return
         self._pending_fetch_uid = None
@@ -2007,32 +2562,41 @@ class MainWindow(QMainWindow):
             and not self._message_body_is_empty(self._current_message)
         ):
             return
-        self._fetch_selected_message(force=force)
+        self._fetch_selected_message(row=row, force=force)
 
-    def _fetch_selected_message(self, *, force: bool = False) -> None:
-        """Descarga y muestra el mensaje de la fila seleccionada."""
-        row = self.message_table.currentRow()
-        if row < 0 or not self.mail_service or not hasattr(self, "_message_uids"):
+    def _fetch_selected_message(
+        self, *, row: int | None = None, force: bool = False
+    ) -> None:
+        """Descarga y muestra el mensaje de la fila indicada (o la seleccionada)."""
+        if not self.mail_service or not hasattr(self, "_message_uids"):
             return
-        if row >= len(self._message_uids):
+        if row is None:
+            row = self.message_table.currentRow()
+        if row < 0 or row >= len(self._message_uids):
             return
         uid = self._message_uids[row]
-        if not force and self._message_loaded_for_selection():
+
+        if (
+            not force
+            and self._current_message
+            and self._current_message.uid == uid
+            and not self._message_body_is_empty(self._current_message)
+        ):
             return
 
+        if self.message_table.currentRow() != row:
+            self.message_table.blockSignals(True)
+            self.message_table.setCurrentCell(row, 0)
+            self.message_table.blockSignals(False)
+
+        self._fetch_generation += 1
+        generation = self._fetch_generation
         self._pending_fetch_uid = uid
         self._update_message_actions()
         self.subject_label.setText("Cargando…")
         self.meta_label.setText("")
         self.message_viewer.show_plain("Cargando mensaje…")
         self.attachment_panel.clear()
-
-        if self._message_fetch_worker and self._message_fetch_worker.isRunning():
-            try:
-                self._message_fetch_worker.signals.finished.disconnect()
-                self._message_fetch_worker.signals.error.disconnect()
-            except (RuntimeError, TypeError):
-                pass
 
         worker = FetchMessageWorker(
             self.mail_service,
@@ -2043,11 +2607,15 @@ class MainWindow(QMainWindow):
             delete_after_download=self._prefs.delete_from_server_after_download,
             refresh_from_server=force,
         )
-        worker.signals.finished.connect(self._display_message)
-        worker.signals.error.connect(self._on_fetch_error)
+        worker.signals.finished.connect(
+            lambda message, g=generation: self._display_message(message, g)
+        )
+        worker.signals.error.connect(
+            lambda message, g=generation: self._on_fetch_error(message, g)
+        )
         worker.start()
         self._message_fetch_worker = worker
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _prefetch_message(self, uid: str) -> None:
         """Precarga en caché el siguiente mensaje de la lista."""
@@ -2067,7 +2635,7 @@ class MainWindow(QMainWindow):
         )
         worker.signals.error.connect(lambda _msg: None)
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_viewer_link_hover(self, url: str) -> None:
         if url:
@@ -2078,7 +2646,11 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(self._status_before_link_hover)
             del self._status_before_link_hover
 
-    def _display_message(self, message: MailMessage) -> None:
+    def _display_message(
+        self, message: MailMessage, generation: int | None = None
+    ) -> None:
+        if generation is not None and generation != self._fetch_generation:
+            return
         if getattr(self, "_pending_fetch_uid", None) != message.uid:
             return
         if message.uid not in getattr(self, "_message_uids", []):
@@ -2115,7 +2687,7 @@ class MainWindow(QMainWindow):
                             self._current_folder,
                         )
                         seen_worker.start()
-                        self._workers.append(seen_worker)
+                        self._track_worker(seen_worker)
         elif deleted_from_server:
             self._all_messages = [
                 m for m in self._all_messages if m.uid != message.uid
@@ -2188,7 +2760,7 @@ class MainWindow(QMainWindow):
         )
         worker.start()
         self._enhance_worker = worker
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _load_remote_images_for_current(self) -> None:
         if not self._current_message or not self._current_message.body_html:
@@ -2220,7 +2792,7 @@ class MainWindow(QMainWindow):
         )
         worker.start()
         self._enhance_worker = worker
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_enhance_error(self, message: str, generation: int | None = None) -> None:
         if generation is not None and generation != self._enhance_generation:
@@ -2293,7 +2865,7 @@ class MainWindow(QMainWindow):
         )
         worker.start()
         self._translate_worker = worker
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _apply_translation(self, body: str, subject: str) -> None:
         if not self._current_message:
@@ -2355,7 +2927,7 @@ class MainWindow(QMainWindow):
         )
         worker.signals.error.connect(self._on_fetch_error)
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_attachment_saved(self, path: str, payload) -> None:
         filename, data = payload
@@ -2372,7 +2944,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self._on_attachment_open)
         worker.signals.error.connect(self._on_fetch_error)
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_attachment_open(self, payload) -> None:
         filename, data = payload
@@ -2422,7 +2994,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self._on_folder_created)
         worker.signals.error.connect(self._on_folder_create_error)
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_folder_created(self, payload) -> None:
         created_path, folders = payload
@@ -2492,7 +3064,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self._on_messages_moved)
         worker.signals.error.connect(self._on_move_error)
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_messages_moved(self, payload) -> None:
         uids, dest = payload
@@ -2583,7 +3155,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self._on_seen_changed)
         worker.signals.error.connect(self._on_fetch_error)
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_seen_changed(self, payload) -> None:
         uid, seen = payload
@@ -2627,7 +3199,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self._on_storage_quota)
         worker.signals.error.connect(lambda _m: self._hide_storage_quota())
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _hide_storage_quota(self) -> None:
         self.quota_bar.setVisible(False)
@@ -2688,7 +3260,7 @@ class MainWindow(QMainWindow):
             lambda m: QMessageBox.warning(self, "Error de baja", m)
         )
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_unsubscribed(self, message: str) -> None:
         if self._current_message:
@@ -2730,7 +3302,7 @@ class MainWindow(QMainWindow):
             lambda m: QMessageBox.warning(self, "Error al exportar", m)
         )
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _export_current_folder_mbox(self) -> None:
         if not self.mail_service or not self.current_account:
@@ -2774,7 +3346,7 @@ class MainWindow(QMainWindow):
             lambda m: QMessageBox.warning(self, "Error al exportar", m)
         )
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_folder_exported(self, payload) -> None:
         path, count = payload
@@ -2807,7 +3379,7 @@ class MainWindow(QMainWindow):
             drafts_folder=find_drafts_folder(self._folder_names),
             snippets=self._prefs.compose_snippets,
         )
-        dialog.exec()
+        self._exec_modal(dialog)
 
     def _reply(self) -> None:
         if not self._message_loaded_for_selection() or not self.current_account:
@@ -2885,7 +3457,7 @@ class MainWindow(QMainWindow):
             worker.signals.finished.connect(self._on_messages_deleted)
         worker.signals.error.connect(self._on_delete_error)
         worker.start()
-        self._workers.append(worker)
+        self._track_worker(worker)
 
     def _on_delete_error(self, message: str) -> None:
         self.status_bar.showMessage("Error al eliminar mensajes")
@@ -2909,38 +3481,55 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"{len(uids)} mensaje(s) eliminado(s)")
 
     def closeEvent(self, event) -> None:
-        self._cancel_sync()
         if self._quitting:
-            self._background_sync.stop()
-            if self.mail_service:
-                self.mail_service.disconnect()
-            if self._tray:
-                self._tray.hide()
+            self._shutdown(fast=True)
             event.accept()
+            return
+
+        # Sin bandeja: preguntar antes de cerrar del todo.
+        if self._tray is None:
+            reply = QMessageBox.question(
+                self,
+                "Salir de PyQorreos",
+                "¿Cerrar la aplicación?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._quitting = True
+                self._shutdown(fast=True)
+                event.accept()
+                self._exit_process(0)
+            else:
+                event.ignore()
             return
 
         # Cerrar la ventana minimiza a la bandeja; Salir cierra del todo.
         event.ignore()
         self.hide()
-        if self._tray:
-            self._tray.show_message(
-                "PyQorreos",
-                "La aplicación sigue activa en la bandeja del sistema.",
-            )
+        self._tray.show_message(
+            "PyQorreos",
+            "La aplicación sigue activa en la bandeja del sistema.",
+        )
 
 
 def run_app() -> None:
     """Crea la aplicación Qt y muestra la ventana principal."""
+    import os
     import sys
 
+    from pyqorreos.core.user_preferences import load_preferences
     from pyqorreos.ui.webengine_setup import configure_webengine_environment
 
     configure_webengine_environment()
     app = QApplication(sys.argv)
     app.setApplicationName("PyQorreos")
     app.setStyle("Fusion")
+    apply_app_theme(app, load_preferences().theme)
     # Mantener la app viva en la bandeja al ocultar la ventana principal.
     app.setQuitOnLastWindowClosed(False)
     window = MainWindow()
     window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    # WebEngine / hilos en red pueden impedir la salida limpia del intérprete.
+    os._exit(exit_code if isinstance(exit_code, int) else 0)

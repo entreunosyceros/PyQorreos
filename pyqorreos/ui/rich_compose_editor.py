@@ -9,6 +9,7 @@ from PySide6.QtGui import (
     QAction,
     QColor,
     QFont,
+    QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
     QTextImageFormat,
@@ -26,71 +27,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-_COMPOSE_DOC_STYLE = """
-body {
-    background-color: #ffffff;
-    color: #1a1a1a;
-    font-family: sans-serif;
-    font-size: 11pt;
-}
-p, div, li, td, th, span {
-    color: #1a1a1a;
-}
-#pyqorreos-reply-area {
-    background-color: #ffffff !important;
-    color: #1a1a1a !important;
-    min-height: 100px;
-}
-"""
-
-_EDITOR_STYLE = """
-QTextEdit {
-    background-color: #ffffff;
-    color: #1a1a1a;
-    border: 1px solid #cccccc;
-    border-radius: 4px;
-    padding: 6px;
-    selection-background-color: #2d7dd2;
-    selection-color: #ffffff;
-}
-"""
-
-_TOOLBAR_STYLE = """
-QToolBar {
-    background-color: #f0f4f8;
-    border: 1px solid #c8d0d8;
-    border-radius: 5px;
-    padding: 4px 6px;
-    spacing: 5px;
-}
-QToolButton {
-    background-color: #e3ebf3;
-    color: #1a1a1a;
-    border: 1px solid #b8c4d0;
-    border-radius: 4px;
-    padding: 5px 11px;
-    font-size: 10pt;
-    font-weight: 600;
-    min-height: 28px;
-}
-QToolButton:hover {
-    background-color: #d5e3f0;
-    border-color: #2d7dd2;
-    color: #1a1a1a;
-}
-QToolButton:pressed {
-    background-color: #c5d8eb;
-    border-color: #1f5fa8;
-}
-"""
+from pyqorreos.ui.theme import apply_compose_editor_theme, resolve_theme_from_parent
 
 
 class RichComposeEditor(QWidget):
     """Área de edición con barra de formato (negrita, enlaces, imágenes…)."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, theme: str | None = None) -> None:
         super().__init__(parent)
+        self._theme = theme
         self._build_ui()
+
+    def _resolve_theme(self) -> str:
+        if self._theme:
+            return self._theme
+        return resolve_theme_from_parent(self.parent())
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -99,7 +50,6 @@ class RichComposeEditor(QWidget):
 
         self.toolbar = QToolBar("Formato")
         self.toolbar.setMovable(False)
-        self.toolbar.setStyleSheet(_TOOLBAR_STYLE)
         self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         layout.addWidget(self.toolbar)
 
@@ -107,11 +57,15 @@ class RichComposeEditor(QWidget):
         self.editor.setAcceptRichText(True)
         self.editor.setPlaceholderText("Escribe tu mensaje aquí…")
         self.editor.setMinimumHeight(220)
-        self.editor.setStyleSheet(_EDITOR_STYLE)
-        self.editor.document().setDefaultStyleSheet(_COMPOSE_DOC_STYLE)
         layout.addWidget(self.editor)
 
+        self.apply_theme(self._resolve_theme())
         self._add_format_actions()
+
+    def apply_theme(self, theme: str | None = None) -> None:
+        if theme:
+            self._theme = theme
+        apply_compose_editor_theme(self, self._resolve_theme())
 
     def _add_format_actions(self) -> None:
         specs = (
@@ -135,6 +89,21 @@ class RichComposeEditor(QWidget):
             action = QAction(label, self)
             action.setToolTip(tip)
             action.triggered.connect(slot)
+            self.toolbar.addAction(action)
+
+        self.toolbar.addSeparator()
+
+        for label, tip, alignment in (
+            ("⬅", "Alinear a la izquierda", Qt.AlignmentFlag.AlignLeft),
+            ("⬌", "Centrar", Qt.AlignmentFlag.AlignCenter),
+            ("➡", "Alinear a la derecha", Qt.AlignmentFlag.AlignRight),
+            ("≡", "Justificar", Qt.AlignmentFlag.AlignJustify),
+        ):
+            action = QAction(label, self)
+            action.setToolTip(tip)
+            action.triggered.connect(
+                lambda _checked=False, align=alignment: self._set_alignment(align)
+            )
             self.toolbar.addAction(action)
 
         self.toolbar.addSeparator()
@@ -200,7 +169,30 @@ class RichComposeEditor(QWidget):
         fmt.setStyle(style)
         cursor.createList(fmt)
 
+    def _set_alignment(self, alignment: Qt.AlignmentFlag) -> None:
+        cursor = self._cursor()
+        block_fmt = QTextBlockFormat()
+        block_fmt.setAlignment(alignment)
+        if cursor.hasSelection():
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+            cursor.beginEditBlock()
+            cursor.setPosition(start)
+            while cursor.position() <= end:
+                cursor.mergeBlockFormat(block_fmt)
+                if cursor.position() >= end:
+                    break
+                if not cursor.movePosition(QTextCursor.MoveOperation.NextBlock):
+                    break
+            cursor.endEditBlock()
+        else:
+            cursor.mergeBlockFormat(block_fmt)
+        self.editor.setTextCursor(cursor)
+        self.editor.setFocus()
+
     def _insert_link(self) -> None:
+        from pyqorreos.ui.theme import accent_color
+
         cursor = self._cursor()
         url, ok = QInputDialog.getText(
             self,
@@ -217,7 +209,7 @@ class RichComposeEditor(QWidget):
         fmt = QTextCharFormat()
         fmt.setAnchor(True)
         fmt.setAnchorHref(url)
-        fmt.setForeground(QColor("#2d7dd2"))
+        fmt.setForeground(QColor(accent_color(self._resolve_theme())))
         fmt.setFontUnderline(True)
 
         if cursor.hasSelection():
@@ -253,21 +245,27 @@ class RichComposeEditor(QWidget):
         self._merge_format(fmt)
 
     def _clear_format(self) -> None:
+        from pyqorreos.ui.theme import theme_tokens
+
         cursor = self._cursor()
         if not cursor.hasSelection():
             return
+        t = theme_tokens(self._resolve_theme())
         fmt = QTextCharFormat()
         fmt.setFontWeight(QFont.Weight.Normal)
         fmt.setFontItalic(False)
         fmt.setFontUnderline(False)
-        fmt.setForeground(QColor("#1a1a1a"))
+        fmt.setForeground(QColor(t.text))
         cursor.mergeCharFormat(fmt)
 
     def _reset_cursor_style(self) -> None:
-        """Fuerza fondo blanco y texto oscuro donde se escribe la respuesta."""
+        """Fuerza colores del tema donde se escribe la respuesta."""
+        from pyqorreos.ui.theme import theme_tokens
+
+        t = theme_tokens(self._resolve_theme())
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor("#1a1a1a"))
-        fmt.setBackground(QColor("#ffffff"))
+        fmt.setForeground(QColor(t.text))
+        fmt.setBackground(QColor(t.bg_panel))
         self.editor.setCurrentCharFormat(fmt)
         cursor = self.editor.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.Start)

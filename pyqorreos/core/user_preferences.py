@@ -36,6 +36,7 @@ class UserPreferences:
         default_factory=lambda: list(DEFAULT_COMPOSE_SNIPPETS)
     )
     translate_target_language: str = "es"
+    theme: str = "light"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -51,10 +52,12 @@ class UserPreferences:
                 filtered["compose_snippets"]
             )
         from pyqorreos.core.translate import normalize_language_code
+        from pyqorreos.ui.theme import normalize_theme
 
         filtered["translate_target_language"] = normalize_language_code(
             str(filtered.get("translate_target_language", "es"))
         )
+        filtered["theme"] = normalize_theme(str(filtered.get("theme", "light")))
         return cls(**filtered)
 
 

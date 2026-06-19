@@ -45,13 +45,24 @@ class IdleMonitorThread(QThread):
             service = MailService(self.account, self.password)
             try:
                 service.connect()
-                if service.wait_for_idle_updates(self.folder, self.timeout_sec):
+                if service.wait_for_idle_updates(
+                    self.folder,
+                    self.timeout_sec,
+                    cancelled=lambda: self._stop,
+                    poll_sec=1,
+                ):
+                    if self._stop:
+                        break
                     self.activity_detected.emit()
                     self.msleep(500)
             except Exception:
+                if self._stop:
+                    break
                 self.msleep(30_000)
             finally:
                 service.disconnect()
+            if self._stop:
+                break
 
 
 class AccountSyncThread(QThread):
@@ -140,23 +151,50 @@ class BackgroundSyncManager(QObject):
             self._accounts[0] if self._accounts else None,
         )
         if active and self._prefs.use_imap_idle:
-            password = self.settings.get_password(active.id)
+            password = self.settings.get_auth_secret(active)
             if password:
-                self._idle_thread = IdleMonitorThread(active, password)
+                self._idle_thread = IdleMonitorThread(active, password, timeout_sec=120)
                 self._idle_thread.activity_detected.connect(self._on_idle_cycle)
+                self._idle_thread.finished.connect(self._idle_thread.deleteLater)
                 self._idle_thread.start()
-        self._poll_all_accounts()
+        self.sync_all_accounts_now()
         interval_ms = max(60, self._prefs.background_sync_interval_sec) * 1000
         self._poll_timer.start(interval_ms)
 
-    def stop(self) -> None:
+    def sync_all_accounts_now(self, *, exclude_account_id: str | None = None) -> None:
+        """Descarga cabeceras nuevas de INBOX en todas las cuentas (p. ej. al arrancar)."""
+        if not self._accounts:
+            return
+        for account in self._accounts:
+            if exclude_account_id and account.id == exclude_account_id:
+                continue
+            self._sync_account_by_id(account.id, "INBOX")
+
+    def stop(self, *, wait_ms: int = 5000) -> None:
         self._poll_timer.stop()
         if self._idle_thread:
+            try:
+                self._idle_thread.activity_detected.disconnect(self._on_idle_cycle)
+            except (RuntimeError, TypeError):
+                pass
             self._idle_thread.stop()
-            self._idle_thread.wait(2000)
+            if wait_ms > 0:
+                self._idle_thread.wait(wait_ms)
+                if self._idle_thread.isRunning():
+                    self._idle_thread.terminate()
+                    self._idle_thread.wait(300)
             self._idle_thread = None
-        for thread in self._sync_threads:
-            thread.wait(1000)
+        for thread in list(self._sync_threads):
+            try:
+                thread.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            if thread.isRunning() and wait_ms > 0:
+                thread.wait(min(wait_ms, 2000))
+                if thread.isRunning():
+                    thread.terminate()
+                    thread.wait(300)
+            thread.deleteLater()
         self._sync_threads.clear()
         self._active_sync_keys.clear()
 
@@ -165,8 +203,7 @@ class BackgroundSyncManager(QObject):
             self._sync_account_by_id(self._active_account_id, "INBOX")
 
     def _poll_all_accounts(self) -> None:
-        for account in self._accounts:
-            self._sync_account_by_id(account.id, "INBOX")
+        self.sync_all_accounts_now()
 
     def _sync_account_by_id(self, account_id: str, folder: str) -> None:
         key = (account_id, folder)
@@ -175,18 +212,19 @@ class BackgroundSyncManager(QObject):
         account = next((a for a in self._accounts if a.id == account_id), None)
         if not account:
             return
-        password = self.settings.get_password(account.id)
-        if not password:
+        auth_secret = self.settings.get_auth_secret(account)
+        if not auth_secret:
             return
         self._active_sync_keys.add(key)
         thread = AccountSyncThread(
             account,
-            password,
+            auth_secret,
             folder,
             self.cache,
             self.settings.get_classifier(),
         )
         thread.finished.connect(lambda: self._on_sync_done(account_id, folder, thread))
+        thread.finished.connect(thread.deleteLater)
         thread.start()
         self._sync_threads.append(thread)
 

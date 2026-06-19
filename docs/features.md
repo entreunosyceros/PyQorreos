@@ -11,13 +11,16 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Varias cuentas de correo (Gmail, Outlook, Yahoo o servidor personalizado)
 - Selector rápido de cuenta activa y gestor de cuentas (añadir, editar, eliminar)
 - Conexión IMAP/SMTP con contraseñas en el llavero del sistema (`keyring`)
+- **Aviso para Gmail** al configurar la cuenta: enlace a contraseña de aplicación (no la contraseña de la cuenta Google)
 - Firma de correo configurable por cuenta
-- Base preparada para OAuth2 (Gmail / Outlook); de momento se usa contraseña de aplicación
+- OAuth2 integrado para **Gmail** y **Outlook** (inicio de sesión en navegador + renovación automática de tokens)
+- Alternativa: contraseña de aplicación (Gmail) o contraseña habitual según el proveedor
 - Bandeja del sistema: la app sigue activa al cerrar la ventana
 
 ## Bandeja y sincronización
 
 - Vista de tres paneles: carpetas | lista de mensajes | lectura
+- **Al iniciar la aplicación**: muestra la caché local de INBOX al instante y descarga cabeceras nuevas del servidor en segundo plano
 - Árbol de carpetas con iconos SVG y contador de no leídos
 - Crear carpetas y subcarpetas en el servidor IMAP; eliminar carpetas de usuario (p. ej. restos de otros clientes como `Mailspring`)
 - Sincronización incremental (solo descarga mensajes nuevos)
@@ -38,7 +41,7 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Modos de vista: HTML original, modo lectura y texto plano
 - Imágenes embebidas (cid); imágenes remotas bloqueables por privacidad
 - Botón «Mostrar imágenes remotas» bajo demanda (descarga en segundo plano)
-- **Traducción** bajo demanda al idioma configurado en Preferencias (botón «Traducir» / «Ver original»)
+- **Traducción** bajo demanda al idioma configurado en Preferencias (botón «Traducir» / «Ver original»); enlaces clicables y menú «Abrir en el navegador»
 - Advertencia anti-phishing al pasar el ratón sobre enlaces sospechosos; la URL se muestra en la barra de estado
 - List-Unsubscribe: botón y menú contextual para darse de baja de listas de correo
 - Adjuntos: listar, abrir y guardar desde el panel del lector
@@ -71,8 +74,15 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 ## Rendimiento y estabilidad
 
 - Operaciones de red en hilos secundarios (la interfaz no se bloquea)
+- Caché SQLite en modo WAL; búsqueda en base de datos con debounce
 - Conexión IMAP dedicada por mensaje y reintentos ante errores de protocolo
 - Cabeceras limitadas en carpetas muy grandes (>5000 mensajes) en la primera sync
+- Timeouts IMAP/SMTP y mensajes de error claros — ver [Pilares de calidad](quality-pillars.md)
+
+## Apariencia
+
+- **Tema claro u oscuro** (Archivo → Preferencias → Apariencia)
+- Estilos unificados en tablas, botones, menús y diálogos (`pyqorreos/ui/theme.py`)
 
 ---
 

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Guía de contribución
+    url: https://github.com/entreunosyceros/PyQorreos/blob/main/CONTRIBUTING.md
+    about: Cómo reportar bugs, proponer mejoras y enviar pull requests.
+  - name: Documentación del proyecto
+    url: https://github.com/entreunosyceros/PyQorreos/blob/main/docs/README.md
+    about: Índice de guías de instalación, uso y configuración.
+  - name: Política de seguridad
+    url: https://github.com/entreunosyceros/PyQorreos/security/policy
+    about: Reporta vulnerabilidades siguiendo SECURITY.md (no publiques detalles en issues abiertas).

@@ -206,25 +206,34 @@ try:
         """Visor HTML con menú contextual en español para abrir enlaces."""
 
         def contextMenuEvent(self, event) -> None:
-            url_to_open = self._context_menu_url()
-            menu = self.createStandardContextMenu(event.pos())
-            if menu is None:
-                menu = QMenu(self)
-            if url_to_open:
-                open_action = QAction("Abrir enlace en el navegador", menu)
-                open_action.triggered.connect(
-                    lambda _checked=False, url=url_to_open: QDesktopServices.openUrl(
-                        QUrl(url)
+            try:
+                menu = self.createStandardContextMenu(event.pos())
+                if menu is None:
+                    menu = QMenu(self)
+                else:
+                    menu.setParent(self)
+
+                url_to_open = self._context_menu_url()
+                if url_to_open:
+                    open_action = QAction("Abrir enlace en el navegador", menu)
+                    open_action.triggered.connect(
+                        lambda _checked=False, url=url_to_open: QDesktopServices.openUrl(
+                            QUrl(url)
+                        )
                     )
-                )
-                first = menu.actions()[0] if menu.actions() else None
-                menu.insertAction(first, open_action)
-                if first is not None:
-                    menu.insertSeparator(first)
-            if not menu.actions():
-                return
-            menu.popup(event.globalPos())
-            event.accept()
+                    first = menu.actions()[0] if menu.actions() else None
+                    menu.insertAction(first, open_action)
+                    if first is not None:
+                        menu.insertSeparator(first)
+
+                if not menu.actions():
+                    event.accept()
+                    return
+
+                menu.exec(event.globalPos())
+                event.accept()
+            except Exception:
+                event.accept()
 
         def _context_menu_url(self) -> str:
             page = self.page()

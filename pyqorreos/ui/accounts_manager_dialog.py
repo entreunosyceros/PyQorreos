@@ -23,6 +23,7 @@ from pyqorreos.core.account import MailAccount
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.settings import Settings
 from pyqorreos.ui.account_dialog import AccountDialog
+from pyqorreos.ui.theme import mark_role, prevent_context_menu
 
 
 class AccountsManagerDialog(QDialog):
@@ -34,17 +35,21 @@ class AccountsManagerDialog(QDialog):
         accounts: list[MailAccount],
         current_account_id: str | None = None,
         parent=None,
+        *,
+        on_configure_oauth=None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
         self.accounts = list(accounts)
         self.current_account_id = current_account_id
         self.selected_account_id: str | None = current_account_id
+        self._on_configure_oauth = on_configure_oauth
         self._cache = MailCache()
 
         self.setWindowTitle("Cuentas de correo")
         self.setMinimumSize(480, 320)
         self._build_ui()
+        prevent_context_menu(self)
         self._refresh_list()
 
     def _build_ui(self) -> None:
@@ -55,7 +60,7 @@ class AccountsManagerDialog(QDialog):
             "de la ventana principal."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #555; margin-bottom: 4px;")
+        mark_role(hint, "hint")
         layout.addWidget(hint)
 
         self.account_list = QListWidget()
@@ -64,10 +69,13 @@ class AccountsManagerDialog(QDialog):
 
         btn_row = QHBoxLayout()
         self.btn_add = QPushButton("+ Añadir")
+        mark_role(self.btn_add, "primary")
         self.btn_add.clicked.connect(self._add_account)
         self.btn_edit = QPushButton("Editar")
+        mark_role(self.btn_edit, "default")
         self.btn_edit.clicked.connect(self._edit_account)
         self.btn_remove = QPushButton("Eliminar")
+        mark_role(self.btn_remove, "danger")
         self.btn_remove.clicked.connect(self._remove_account)
         self.btn_use = QPushButton("Usar esta cuenta")
         self.btn_use.clicked.connect(self._use_selected)
@@ -113,7 +121,11 @@ class AccountsManagerDialog(QDialog):
         return next((a for a in self.accounts if a.id == account_id), None)
 
     def _add_account(self) -> None:
-        dialog = AccountDialog(self.settings, parent=self)
+        dialog = AccountDialog(
+            self.settings,
+            parent=self,
+            on_configure_oauth=self._on_configure_oauth,
+        )
         if dialog.exec() != AccountDialog.DialogCode.Accepted:
             return
         account, password = dialog.get_result()
@@ -149,7 +161,12 @@ class AccountsManagerDialog(QDialog):
         account = self._selected_account()
         if not account:
             return
-        dialog = AccountDialog(self.settings, account=account, parent=self)
+        dialog = AccountDialog(
+            self.settings,
+            account=account,
+            parent=self,
+            on_configure_oauth=self._on_configure_oauth,
+        )
         if dialog.exec() != AccountDialog.DialogCode.Accepted:
             return
         updated, password = dialog.get_result()
@@ -174,7 +191,7 @@ class AccountsManagerDialog(QDialog):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        self.settings.delete_password(account.id)
+        self.settings.delete_account_secrets(account.id, account.auth_method)
         self._cache.delete_account(account.id)
         self.accounts = [a for a in self.accounts if a.id != account.id]
         self.settings.save_accounts(self.accounts)

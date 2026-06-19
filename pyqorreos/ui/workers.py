@@ -14,6 +14,7 @@ from pyqorreos.core.account import MailAccount
 from pyqorreos.core.classifier import MailClassifier
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.mail_service import IMAP_BATCH_SIZE, MailFolder, MailMessage, MailService, MailSummary
+from pyqorreos.core.network_errors import friendly_mail_error
 
 
 class WorkerSignals(QObject):
@@ -54,7 +55,25 @@ class ConnectWorker(QThread):
             folders = service.list_folders()
             self.signals.finished.emit((service, folders))
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
+
+
+class LoadFolderWorker(QThread):
+    """Carga la caché local de una carpeta sin bloquear la interfaz."""
+
+    def __init__(self, cache: MailCache, account_id: str, folder: str) -> None:
+        super().__init__()
+        self.cache = cache
+        self.account_id = account_id
+        self.folder = folder
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            summaries = self.cache.load_folder(self.account_id, self.folder)
+            self.signals.finished.emit(summaries)
+        except Exception as exc:
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class SyncFolderWorker(QThread):
@@ -158,7 +177,7 @@ class SyncFolderWorker(QThread):
             self.signals.finished.emit((all_summaries, new_summaries))
         except Exception as exc:
             if not self._cancelled:
-                self.signals.error.emit(str(exc))
+                self.signals.error.emit(friendly_mail_error(exc))
 
 
 class FetchMessageWorker(QThread):
@@ -236,7 +255,7 @@ class FetchMessageWorker(QThread):
             self._maybe_delete_from_server()
             self.signals.finished.emit(message)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class EnhanceHtmlWorker(QThread):
@@ -263,7 +282,7 @@ class EnhanceHtmlWorker(QThread):
             )
             self.signals.finished.emit((self.uid, enhanced))
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class TranslateMessageWorker(QThread):
@@ -297,7 +316,7 @@ class TranslateMessageWorker(QThread):
                 (self.uid, self.target_lang, body, subject)
             )
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class SetSeenWorker(QThread):
@@ -328,7 +347,7 @@ class SetSeenWorker(QThread):
                 )
             self.signals.finished.emit((self.uid, self.seen))
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class SendMailWorker(QThread):
@@ -367,7 +386,7 @@ class SendMailWorker(QThread):
             )
             self.signals.finished.emit(True)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class DeleteMessageWorker(QThread):
@@ -394,7 +413,7 @@ class DeleteMessageWorker(QThread):
                 self.cache.delete_message(self.account_id, self.folder, self.uid)
             self.signals.finished.emit(self.uid)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class DeleteMessagesWorker(QThread):
@@ -422,7 +441,7 @@ class DeleteMessagesWorker(QThread):
                     self.cache.delete_message(self.account_id, self.folder, uid)
             self.signals.finished.emit(self.uids)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class MoveMessagesWorker(QThread):
@@ -458,7 +477,7 @@ class MoveMessagesWorker(QThread):
                     )
             self.signals.finished.emit((self.uids, self.dest_folder))
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class CreateFolderWorker(QThread):
@@ -482,7 +501,7 @@ class CreateFolderWorker(QThread):
             folders = [f.name for f in self.service.list_folders()]
             self.signals.finished.emit((created, folders))
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class DeleteFolderWorker(QThread):
@@ -514,7 +533,7 @@ class DeleteFolderWorker(QThread):
             folders = [f.name for f in self.service.list_folders()]
             self.signals.finished.emit((deleted, folders))
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class EmptyFolderWorker(QThread):
@@ -533,7 +552,7 @@ class EmptyFolderWorker(QThread):
                 self.cache.clear_folder(self.account_id, self.folder)
             self.signals.finished.emit((self.folder, count))
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class FolderUnreadWorker(QThread):
@@ -556,7 +575,7 @@ class FolderUnreadWorker(QThread):
             counts = service.get_folder_unread_counts(self.folders)
             self.signals.finished.emit(counts)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
         finally:
             service.disconnect()
 
@@ -583,7 +602,7 @@ class FetchAttachmentWorker(QThread):
             )
             self.signals.finished.emit((filename, data))
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class SaveDraftWorker(QThread):
@@ -599,7 +618,7 @@ class SaveDraftWorker(QThread):
             self.service.save_draft(self.folder, self.raw_message)
             self.signals.finished.emit(True)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class UnsubscribeWorker(QThread):
@@ -646,7 +665,7 @@ class UnsubscribeWorker(QThread):
                 )
             self.signals.finished.emit(message)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class StorageQuotaWorker(QThread):
@@ -660,7 +679,7 @@ class StorageQuotaWorker(QThread):
             quota = self.service.get_storage_quota()
             self.signals.finished.emit(quota)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class ExportMessageWorker(QThread):
@@ -688,7 +707,7 @@ class ExportMessageWorker(QThread):
             save_eml(raw, Path(self.dest_path))
             self.signals.finished.emit(self.dest_path)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(friendly_mail_error(exc))
 
 
 class ExportFolderWorker(QThread):
@@ -726,4 +745,34 @@ class ExportFolderWorker(QThread):
             count = save_mbox(messages, Path(self.dest_path))
             self.signals.finished.emit((self.dest_path, count))
         except Exception as exc:
+            self.signals.error.emit(friendly_mail_error(exc))
+
+
+class OAuthFlowWorker(QThread):
+    """Ejecuta OAuthFlow.run_flow() en segundo plano y guarda los tokens en el llavero."""
+
+    open_url = Signal(str)
+
+    def __init__(self, provider_key: str, account_id: str) -> None:
+        super().__init__()
+        self.provider_key = provider_key
+        self.account_id = account_id
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        from pyqorreos.core.oauth import OAuthFlow, OAuthError, store_oauth_tokens
+
+        try:
+            flow = OAuthFlow(self.provider_key, open_browser=self._open_browser)
+            token = flow.run_flow()
+            store_oauth_tokens(self.account_id, token)
+            self.signals.finished.emit(token)
+        except OAuthError as exc:
             self.signals.error.emit(str(exc))
+        except Exception as exc:
+            self.signals.error.emit(friendly_mail_error(exc))
+
+    def _open_browser(self, url: str) -> bool:
+        """Emite la URL para abrirla en el hilo principal (Qt)."""
+        self.open_url.emit(url)
+        return True

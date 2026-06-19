@@ -16,6 +16,8 @@ Guías y referencia del proyecto. Empieza por [Instalación](installation.md) o 
 | [Atajos de teclado](keyboard-shortcuts.md) | Tabla de atajos |
 | [Estructura del proyecto](project-structure.md) | Árbol de carpetas y módulos |
 | [Configuración y notas](configuration.md) | Archivos de datos, Gmail, traducción, privacidad… |
+| [Pilares de calidad](quality-pillars.md) | Rendimiento, robustez y calidad visual |
+| [Historial de cambios](changelog.md) | Mejoras recientes (sync, tema, traducción…) |
 
 ---
 

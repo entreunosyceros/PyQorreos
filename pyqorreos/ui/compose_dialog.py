@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html as html_module
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -25,69 +26,17 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.core.compose_email import EmailAttachment, build_draft_bytes, prepare_outgoing_html
-from pyqorreos.core.compose_utils import body_mentions_attachment
+from pyqorreos.core.compose_utils import (
+    body_mentions_attachment,
+    large_attachment_warning,
+    validate_attachments,
+)
 from pyqorreos.core.mail_service import MailService
 from pyqorreos.core.reply_utils import ComposeDraft
 from pyqorreos.core.user_preferences import DEFAULT_COMPOSE_SNIPPETS
 from pyqorreos.ui.rich_compose_editor import RichComposeEditor
+from pyqorreos.ui.theme import mark_role, resolve_theme_from_parent
 from pyqorreos.ui.workers import SaveDraftWorker, SendMailWorker
-
-_COMPOSE_BTN = """
-QPushButton {
-    background-color: #e3ebf3;
-    color: #1a1a1a;
-    border: 1px solid #b8c4d0;
-    border-radius: 4px;
-    padding: 6px 14px;
-    font-size: 10pt;
-    font-weight: 600;
-    min-height: 28px;
-}
-QPushButton:hover {
-    background-color: #d5e3f0;
-    border-color: #2d7dd2;
-}
-QPushButton:pressed {
-    background-color: #c5d8eb;
-}
-"""
-
-_COMPOSE_BTN_PRIMARY = """
-QPushButton {
-    background-color: #2d7dd2;
-    color: #ffffff;
-    border: 1px solid #1f5fa8;
-    border-radius: 4px;
-    padding: 6px 18px;
-    font-size: 10pt;
-    font-weight: 600;
-    min-height: 28px;
-}
-QPushButton:hover {
-    background-color: #3a8de0;
-}
-QPushButton:pressed {
-    background-color: #1f5fa8;
-}
-"""
-
-_DIALOG_STYLE = """
-QDialog {
-    background-color: #ffffff;
-    color: #1a1a1a;
-}
-QLabel {
-    color: #1a1a1a;
-}
-QLineEdit {
-    background-color: #ffffff;
-    color: #1a1a1a;
-    border: 1px solid #cccccc;
-    border-radius: 3px;
-    padding: 4px;
-}
-"""
-
 
 class ComposeDialog(QDialog):
     """Diálogo para redactar y enviar un correo."""
@@ -111,9 +60,23 @@ class ComposeDialog(QDialog):
         self._attachments: list[EmailAttachment] = []
         self.setWindowTitle(title)
         self.setMinimumSize(720, 560)
-        self.setStyleSheet(_DIALOG_STYLE)
+        self.resize(820, 620)
+        self._configure_window_flags()
+        self._theme = resolve_theme_from_parent(parent)
         self._build_ui()
         self._load_draft()
+
+    def _configure_window_flags(self) -> None:
+        """Permite minimizar y maximizar como una ventana normal."""
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -124,12 +87,15 @@ class ComposeDialog(QDialog):
         form.addRow("Para:", self.to_edit)
 
         self.cc_edit = QLineEdit()
+        self.cc_edit.setPlaceholderText("copia@ejemplo.com (opcional)")
         form.addRow("CC:", self.cc_edit)
 
         self.bcc_edit = QLineEdit()
+        self.bcc_edit.setPlaceholderText("copia.oculta@ejemplo.com (opcional)")
         form.addRow("CCO:", self.bcc_edit)
 
         self.subject_edit = QLineEdit()
+        self.subject_edit.setPlaceholderText("Escribe el asunto del correo")
         form.addRow("Asunto:", self.subject_edit)
 
         layout.addLayout(form)
@@ -145,16 +111,16 @@ class ComposeDialog(QDialog):
         layout.addLayout(snippet_row)
 
         layout.addWidget(QLabel("Mensaje:"))
-        self.body_editor = RichComposeEditor()
+        self.body_editor = RichComposeEditor(theme=self._theme)
         layout.addWidget(self.body_editor)
 
         attach_row = QHBoxLayout()
         attach_row.addWidget(QLabel("Adjuntos:"))
         self.attach_btn = QPushButton("📎 Añadir archivos…")
-        self.attach_btn.setStyleSheet(_COMPOSE_BTN)
+        mark_role(self.attach_btn, "default")
         self.attach_btn.clicked.connect(self._add_attachments)
         self.remove_attach_btn = QPushButton("Quitar seleccionado")
-        self.remove_attach_btn.setStyleSheet(_COMPOSE_BTN)
+        mark_role(self.remove_attach_btn, "default")
         self.remove_attach_btn.clicked.connect(self._remove_attachment)
         attach_row.addWidget(self.attach_btn)
         attach_row.addWidget(self.remove_attach_btn)
@@ -167,7 +133,7 @@ class ComposeDialog(QDialog):
 
         buttons = QDialogButtonBox()
         self.draft_btn = QPushButton("Guardar borrador")
-        self.draft_btn.setStyleSheet(_COMPOSE_BTN)
+        mark_role(self.draft_btn, "default")
         self.draft_btn.clicked.connect(self._save_draft)
         if not self._drafts_folder:
             self.draft_btn.setEnabled(False)
@@ -178,10 +144,10 @@ class ComposeDialog(QDialog):
         ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
         if ok_btn:
             ok_btn.setText("Enviar")
-            ok_btn.setStyleSheet(_COMPOSE_BTN_PRIMARY)
+            mark_role(ok_btn, "primary")
         cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         if cancel_btn:
-            cancel_btn.setStyleSheet(_COMPOSE_BTN)
+            mark_role(cancel_btn, "default")
         buttons.accepted.connect(self._send)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -299,6 +265,23 @@ class ComposeDialog(QDialog):
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
+
+        if self._attachments:
+            ok, err = validate_attachments([a.path for a in self._attachments])
+            if not ok:
+                QMessageBox.warning(self, "Adjuntos demasiado grandes", err)
+                return
+            warn = large_attachment_warning([a.path for a in self._attachments])
+            if warn:
+                reply = QMessageBox.warning(
+                    self,
+                    "Adjuntos grandes",
+                    warn + "\n\n¿Enviar de todos modos?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    return
 
         self.setEnabled(False)
         self.worker = SendMailWorker(

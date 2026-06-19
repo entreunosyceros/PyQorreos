@@ -117,7 +117,11 @@ def launch_app() -> int:
     configure_webengine_environment()
     from pyqorreos.ui.main_window import run_app
 
-    run_app()
+    try:
+        run_app()
+    except KeyboardInterrupt:
+        print("\nAplicación cerrada por el usuario.")
+        os._exit(0)
     return 0
 
 
@@ -148,18 +152,12 @@ def main() -> int:
         print("Iniciando PyQorreos …")
         env = os.environ.copy()
         env["PYTHONPATH"] = str(PROJECT_DIR)
-        result = subprocess.run(
-            [str(venv_python), str(__file__)],
-            cwd=PROJECT_DIR,
-            env=env,
-        )
-        if result.returncode != 0:
-            print(
-                f"PyQorreos no pudo iniciarse (código {result.returncode}). "
-                "Ejecuta: .venv/bin/python run_app.py para ver el error.",
-                file=sys.stderr,
-            )
-        return result.returncode
+        os.environ.update(env)
+        argv = [str(venv_python), str(__file__), *sys.argv[1:]]
+        # Reemplaza este proceso por el Python del venv (sin proceso padre bloqueando
+        # la terminal en subprocess.run tras cerrar la aplicación).
+        os.execv(str(venv_python), argv)
+        return 1
 
     except subprocess.CalledProcessError as exc:
         print(f"Error al preparar el entorno: {exc}", file=sys.stderr)

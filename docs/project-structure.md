@@ -20,6 +20,7 @@ PyQorreos/
     │   ├── classifier.py           # Clasificación spam / importante
     │   ├── email_html.py           # Preparación HTML para lectura
     │   ├── translate.py            # Traducción de mensajes (deep-translator)
+    │   ├── network_errors.py       # Mensajes de error legibles (red/IMAP/SMTP)
     │   ├── list_unsubscribe.py     # Cabecera List-Unsubscribe
     │   ├── link_safety.py          # Detección de enlaces sospechosos
     │   ├── export_mail.py          # Exportación .eml / .mbox
@@ -50,6 +51,7 @@ PyQorreos/
         ├── folder_icons.py         # Iconos por tipo de carpeta
         ├── system_tray.py
         ├── webengine_setup.py
+        ├── theme.py                # Tema claro/oscuro y estilos globales
         └── workers.py              # Hilos de red
 ```
 

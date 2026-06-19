@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.core.link_safety import is_suspicious_link, url_from_loose_text
+from pyqorreos.ui.theme import apply_message_viewer_theme, mark_object, mark_role
 
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -58,18 +59,27 @@ class MessageViewer(QWidget):
         self._remote_blocked = False
         self._hovered_link_url = ""
         self._showing_translation = False
+        self._compact_toolbar = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        toolbar = QHBoxLayout()
+        self._toolbar = QWidget()
+        self._toolbar.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        toolbar = QHBoxLayout(self._toolbar)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(6)
         self._btn_load_images = QPushButton("🖼 Mostrar imágenes remotas")
+        self._btn_load_images.setToolTip("Mostrar imágenes remotas del mensaje")
         self._btn_load_images.setVisible(False)
         self._btn_load_images.clicked.connect(self.load_remote_images_requested.emit)
         toolbar.addWidget(self._btn_load_images)
 
         self._btn_view_mode = QPushButton("📄 Modo lectura")
+        self._btn_view_mode.setToolTip("Alternar entre HTML, modo lectura y texto plano")
         self._btn_view_mode.setVisible(False)
         self._btn_view_mode.clicked.connect(self._toggle_view_mode)
         toolbar.addWidget(self._btn_view_mode)
@@ -81,17 +91,20 @@ class MessageViewer(QWidget):
         )
         self._btn_translate.clicked.connect(self.translate_requested.emit)
         toolbar.addWidget(self._btn_translate)
+        toolbar.addStretch(1)
+        for btn in (
+            self._btn_load_images,
+            self._btn_view_mode,
+            self._btn_translate,
+        ):
+            mark_role(btn, "secondary")
 
-        toolbar.addStretch()
-        layout.addLayout(toolbar)
+        layout.addWidget(self._toolbar)
 
         self._link_warning = QLabel()
         self._link_warning.setWordWrap(True)
         self._link_warning.setVisible(False)
-        self._link_warning.setStyleSheet(
-            "background: #fff3cd; color: #664d03; border: 1px solid #ffc107; "
-            "border-radius: 4px; padding: 6px 10px; font-size: 10pt;"
-        )
+        mark_role(self._link_warning, "link-warning")
         layout.addWidget(self._link_warning)
 
         self._stack = QStackedWidget()
@@ -101,12 +114,12 @@ class MessageViewer(QWidget):
         if _HAS_WEBENGINE:
             view_cls = MailWebEngineView if MailWebEngineView is not None else QWebEngineView
             self._web = view_cls()
+            self._web.setMinimumSize(0, 0)
             self._web.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
             if QuietWebEnginePage is not None:
                 self._web.setPage(QuietWebEnginePage(self._web))
-            self._web.setStyleSheet("background: #ffffff;")
             page = self._web.page()
             if page is not None and hasattr(page, "linkHovered"):
                 page.linkHovered.connect(self._on_link_hovered)
@@ -135,10 +148,34 @@ class MessageViewer(QWidget):
         self._text.customContextMenuRequested.connect(
             lambda pos: self._show_text_browser_link_menu(self._text, pos)
         )
-        self._text.setStyleSheet(
-            "QTextBrowser { background: #ffffff; color: #1a1a1a; font-size: 11pt; }"
-        )
+        mark_object(self._text, "pyqMessageSurface")
         self._stack.addWidget(self._text)
+
+        from pyqorreos.core.user_preferences import load_preferences
+
+        apply_message_viewer_theme(self, load_preferences().theme)
+
+    def apply_theme(self, theme: str) -> None:
+        apply_message_viewer_theme(self, theme)
+
+    def set_compact_toolbar(self, compact: bool) -> None:
+        if compact == self._compact_toolbar:
+            return
+        self._compact_toolbar = compact
+        self._btn_load_images.setText(
+            "🖼 Imágenes" if compact else "🖼 Mostrar imágenes remotas"
+        )
+        self._btn_view_mode.setText("📄 Lectura" if compact else "📄 Modo lectura")
+
+    def sync_toolbar_strip(self) -> None:
+        pass
+
+    def set_viewer_updates_enabled(self, enabled: bool) -> None:
+        """Activa o pausa repintados del visor (p. ej. al mover el divisor)."""
+        self.setUpdatesEnabled(enabled)
+        if _HAS_WEBENGINE and hasattr(self, "_web"):
+            self._web.setUpdatesEnabled(enabled)
+        self._stack.setUpdatesEnabled(enabled)
 
     def _clear_link_hover(self) -> None:
         self._hovered_link_url = ""
@@ -147,6 +184,8 @@ class MessageViewer(QWidget):
 
     def _show_text_browser_link_menu(self, browser: QTextBrowser, pos) -> None:
         menu = browser.createStandardContextMenu(pos)
+        if menu is None:
+            return
         url = browser.anchorAt(pos)
         if not url:
             selected = browser.textCursor().selectedText().strip()
@@ -370,3 +409,18 @@ class MessageViewer(QWidget):
         self._stored_base_url = ""
         self._view_mode = "html"
         self.show_plain("")
+
+    def shutdown_engine(self) -> None:
+        """Libera Qt WebEngine antes de salir (evita procesos huérfanos)."""
+        if not _HAS_WEBENGINE or not hasattr(self, "_web"):
+            return
+        try:
+            self._web.setHtml("")
+            page = self._web.page()
+            self._web.setPage(None)
+            if page is not None:
+                page.deleteLater()
+            self._web.hide()
+            self._web.deleteLater()
+        except RuntimeError:
+            pass

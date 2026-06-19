@@ -4,6 +4,18 @@
 
 Guía de los primeros pasos. Si aún no has instalado la app, empieza por [Instalación](installation.md).
 
+## Al abrir la aplicación
+
+Si ya tienes cuentas configuradas, PyQorreos:
+
+1. Muestra **de inmediato** los mensajes en caché de la bandeja de entrada (INBOX).
+2. **Se conecta al servidor** y descarga cabeceras de correo **nuevo** (barra de progreso en la parte inferior).
+3. Si tienes varias cuentas y la sincronización en segundo plano está activa, actualiza también el INBOX de las demás cuentas.
+
+La ventana permanece usable mientras conecta; no hace falta pulsar «Actualizar» al arrancar.
+
+## Primeros pasos
+
 1. **Cuenta → Gestionar cuentas** (o **Gestionar…** en la barra superior) para añadir una o más cuentas.
 2. Usa **Probar conexión** en el diálogo de cuenta antes de guardar.
 3. Opcional: define una **firma** en el diálogo de cuenta.

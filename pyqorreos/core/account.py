@@ -78,3 +78,22 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     },
     "Personalizado": {},
 }
+
+GMAIL_APP_PASSWORD_URL = "https://myaccount.google.com/apppasswords"
+GMAIL_APP_PASSWORD_HELP_URL = "https://support.google.com/accounts/answer/185833"
+
+
+def is_gmail_account(
+    *,
+    provider: str = "",
+    email: str = "",
+    imap_host: str = "",
+) -> bool:
+    """True si la configuración apunta a una cuenta Gmail."""
+    if provider.strip().lower() == "gmail":
+        return True
+    addr = email.strip().lower()
+    if addr.endswith("@gmail.com") or addr.endswith("@googlemail.com"):
+        return True
+    host = imap_host.strip().lower()
+    return "gmail.com" in host or "googlemail.com" in host

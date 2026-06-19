@@ -73,6 +73,25 @@ class Settings:
         except keyring.errors.PasswordDeleteError:
             pass
 
+    def get_auth_secret(self, account: MailAccount) -> str | None:
+        """Contraseña o access_token OAuth listo para IMAP/SMTP."""
+        from pyqorreos.core.oauth import AuthMethod, OAuthError, ensure_valid_access_token
+
+        if account.auth_method == AuthMethod.OAUTH2.value:
+            try:
+                return ensure_valid_access_token(account)
+            except OAuthError:
+                return None
+        return self.get_password(account.id)
+
+    def delete_account_secrets(self, account_id: str, auth_method: str = "password") -> None:
+        """Elimina contraseña y token OAuth de una cuenta."""
+        from pyqorreos.core.oauth import AuthMethod, delete_oauth_token
+
+        self.delete_password(account_id)
+        if auth_method == AuthMethod.OAUTH2.value:
+            delete_oauth_token(account_id)
+
     def get_last_account_id(self) -> str | None:
         data = self._read_raw_json()
         return data.get("last_account_id")

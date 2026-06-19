@@ -69,7 +69,34 @@ class MailCache:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA cache_size=-64000")
         return conn
+
+    @staticmethod
+    def _summary_from_row(row: sqlite3.Row) -> MailSummary:
+        date_val = None
+        if row["date_iso"]:
+            try:
+                date_val = normalize_mail_datetime(
+                    datetime.fromisoformat(row["date_iso"])
+                )
+            except ValueError:
+                pass
+        return MailSummary(
+            uid=row["uid"],
+            subject=row["subject"],
+            sender=row["sender"],
+            date=date_val,
+            seen=bool(row["seen"]),
+            flagged=bool(row["flagged"]),
+            category=MailCategory(row["category"]),
+            has_attachments=bool(row["has_attachments"]),
+            message_id=row["message_id"] or "",
+            thread_key=row["thread_key"] or "",
+        )
 
     def _init_db(self) -> None:
         with self._connect() as conn:
@@ -223,32 +250,59 @@ class MailCache:
                 """,
                 (account_id, folder),
             ).fetchall()
+        return [self._summary_from_row(row) for row in rows]
 
-        summaries: list[MailSummary] = []
-        for row in rows:
-            date_val = None
-            if row["date_iso"]:
-                try:
-                    date_val = normalize_mail_datetime(
-                        datetime.fromisoformat(row["date_iso"])
-                    )
-                except ValueError:
-                    pass
-            summaries.append(
-                MailSummary(
-                    uid=row["uid"],
-                    subject=row["subject"],
-                    sender=row["sender"],
-                    date=date_val,
-                    seen=bool(row["seen"]),
-                    flagged=bool(row["flagged"]),
-                    category=MailCategory(row["category"]),
-                    has_attachments=bool(row["has_attachments"]),
-                    message_id=row["message_id"] or "",
-                    thread_key=row["thread_key"] or "",
-                )
+    def folder_count(self, account_id: str, folder: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM messages
+                WHERE account_id = ? AND folder = ?
+                """,
+                (account_id, folder),
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
+    def query_summaries(
+        self,
+        account_id: str,
+        folder: str,
+        *,
+        query: str = "",
+        category: str | None = None,
+        unread_only: bool = False,
+        sort_by: str = "date_desc",
+    ) -> list[MailSummary]:
+        """Filtra y ordena en SQLite (búsqueda rápida sin recorrer toda la lista en Python)."""
+        clauses = ["account_id = ?", "folder = ?"]
+        params: list[object] = [account_id, folder]
+        q = query.strip()
+        if q:
+            like = f"%{q}%"
+            clauses.append(
+                "(subject LIKE ? COLLATE NOCASE OR sender LIKE ? COLLATE NOCASE)"
             )
-        return summaries
+            params.extend([like, like])
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+        if unread_only:
+            clauses.append("seen = 0")
+        order_sql = {
+            "date_asc": "COALESCE(date_iso, '') ASC, sort_index ASC",
+            "sender": "LOWER(sender) ASC, sort_index ASC",
+            "subject": "LOWER(subject) ASC, sort_index ASC",
+        }.get(sort_by, "COALESCE(date_iso, '') DESC, sort_index ASC")
+        sql = f"""
+            SELECT uid, subject, sender, date_iso, seen, flagged, category,
+                   has_attachments, message_id, thread_key
+            FROM messages
+            WHERE {' AND '.join(clauses)}
+            ORDER BY {order_sql}
+        """
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._summary_from_row(row) for row in rows]
 
     def search_summaries(
         self,
@@ -259,17 +313,12 @@ class MailCache:
         unread_only: bool = False,
     ) -> list[MailSummary]:
         """Búsqueda simple en asunto y remitente (caché local)."""
-        summaries = self.load_folder(account_id, folder)
-        q = query.strip().lower()
-        if q:
-            summaries = [
-                s
-                for s in summaries
-                if q in (s.subject or "").lower() or q in (s.sender or "").lower()
-            ]
-        if unread_only:
-            summaries = [s for s in summaries if not s.seen]
-        return summaries
+        return self.query_summaries(
+            account_id,
+            folder,
+            query=query,
+            unread_only=unread_only,
+        )
 
     def update_category(
         self, account_id: str, folder: str, uid: str, category: MailCategory

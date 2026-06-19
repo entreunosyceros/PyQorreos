@@ -25,9 +25,14 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
 from pyqorreos.core.account import MailAccount
+from pyqorreos.core.oauth import AuthMethod, build_xoauth2_string
 from pyqorreos.core.classifier import MailCategory, MailClassifier
 from pyqorreos.core.compose_email import EmailAttachment
 from pyqorreos.core.email_html import prepare_html_for_display
+from pyqorreos.core.network_errors import friendly_mail_error
+
+IMAP_SOCKET_TIMEOUT = 60
+SMTP_SOCKET_TIMEOUT = 120
 from pyqorreos.core.folder_utils import normalize_thread_subject
 from pyqorreos.core.message_attachments import (
     MailAttachmentInfo,
@@ -295,12 +300,32 @@ class MailService:
     def _open_imap_session(self) -> None:
         if self.account.use_ssl:
             self._imap = imaplib.IMAP4_SSL(
-                self.account.imap_host, self.account.imap_port
+                self.account.imap_host,
+                self.account.imap_port,
+                timeout=IMAP_SOCKET_TIMEOUT,
             )
         else:
-            self._imap = imaplib.IMAP4(self.account.imap_host, self.account.imap_port)
+            self._imap = imaplib.IMAP4(
+                self.account.imap_host,
+                self.account.imap_port,
+                timeout=IMAP_SOCKET_TIMEOUT,
+            )
         assert self._imap is not None
-        self._imap.login(self.account.email, self.password)
+        self._imap_login(self._imap)
+
+    def _imap_login(self, conn: imaplib.IMAP4_SSL | imaplib.IMAP4) -> None:
+        if self.account.auth_method == AuthMethod.OAUTH2.value:
+            auth_string = build_xoauth2_string(self.account.email, self.password)
+            conn.authenticate("XOAUTH2", lambda _challenge: auth_string)
+            return
+        conn.login(self.account.email, self.password)
+
+    def _smtp_login(self, server: smtplib.SMTP) -> None:
+        if self.account.auth_method == AuthMethod.OAUTH2.value:
+            auth_string = build_xoauth2_string(self.account.email, self.password)
+            server.auth("XOAUTH2", lambda _challenge=None: auth_string)
+            return
+        server.login(self.account.email, self.password)
 
     def ensure_connected(self) -> None:
         """Reconecta si la sesión IMAP dejó de responder."""
@@ -340,11 +365,17 @@ class MailService:
         """Abre una conexión IMAP nueva e independiente (para leer mensajes completos)."""
         if self.account.use_ssl:
             conn: imaplib.IMAP4_SSL | imaplib.IMAP4 = imaplib.IMAP4_SSL(
-                self.account.imap_host, self.account.imap_port
+                self.account.imap_host,
+                self.account.imap_port,
+                timeout=IMAP_SOCKET_TIMEOUT,
             )
         else:
-            conn = imaplib.IMAP4(self.account.imap_host, self.account.imap_port)
-        conn.login(self.account.email, self.password)
+            conn = imaplib.IMAP4(
+                self.account.imap_host,
+                self.account.imap_port,
+                timeout=IMAP_SOCKET_TIMEOUT,
+            )
+        self._imap_login(conn)
         return conn
 
     def _quoted_folder(self, folder: str) -> str:
@@ -892,16 +923,25 @@ class MailService:
 
         # Bifurcación limpia según el tipo de puerto SMTP configurado
         if self.account.smtp_port == 465:
-            with smtplib.SMTP_SSL(self.account.smtp_host, self.account.smtp_port, context=context) as server:
-                server.login(self.account.email, self.password)
+            with smtplib.SMTP_SSL(
+                self.account.smtp_host,
+                self.account.smtp_port,
+                context=context,
+                timeout=SMTP_SOCKET_TIMEOUT,
+            ) as server:
+                self._smtp_login(server)
                 server.send_message(msg, to_addrs=recipients)
         else:
-            with smtplib.SMTP(self.account.smtp_host, self.account.smtp_port) as server:
+            with smtplib.SMTP(
+                self.account.smtp_host,
+                self.account.smtp_port,
+                timeout=SMTP_SOCKET_TIMEOUT,
+            ) as server:
                 server.ehlo()
                 if self.account.use_starttls:
                     server.starttls(context=context)
                     server.ehlo()
-                server.login(self.account.email, self.password)
+                self._smtp_login(server)
                 server.send_message(msg, to_addrs=recipients)
 
     def set_flagged(self, uid: str, flagged: bool = True, folder: str | None = None) -> None:
@@ -1182,13 +1222,19 @@ class MailService:
             return None
 
     def wait_for_idle_updates(
-        self, folder: str, timeout_sec: int = 300
+        self,
+        folder: str,
+        timeout_sec: int = 300,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+        poll_sec: int = 30,
     ) -> bool:
         """
         Espera notificaciones IMAP IDLE (nuevos mensajes).
         Devuelve True si hubo actividad, False si timeout o no soportado.
         """
         import select
+        import time
 
         imap = self._new_imap_connection()
         try:
@@ -1205,7 +1251,16 @@ class MailService:
             if sock is None:
                 imap.send(b"DONE\r\n")
                 return False
-            readable, _, _ = select.select([sock], [], [], timeout_sec)
+            deadline = time.monotonic() + timeout_sec
+            readable = False
+            while time.monotonic() < deadline:
+                if cancelled and cancelled():
+                    break
+                wait = min(poll_sec, max(1.0, deadline - time.monotonic()))
+                ready, _, _ = select.select([sock], [], [], wait)
+                if ready:
+                    readable = True
+                    break
             imap.send(b"DONE\r\n")
             while True:
                 line = imap.readline()
@@ -1213,7 +1268,7 @@ class MailService:
                     break
                 if line.startswith(tag.encode("ascii")):
                     break
-            return bool(readable)
+            return readable
         except (imaplib.IMAP4.error, OSError, AttributeError, ValueError):
             return False
         finally:
@@ -1222,11 +1277,41 @@ class MailService:
             except Exception:
                 pass
 
+    def test_smtp(self) -> tuple[bool, str]:
+        """Comprueba login SMTP sin enviar correo."""
+        context = ssl.create_default_context()
+        try:
+            if self.account.smtp_port == 465:
+                with smtplib.SMTP_SSL(
+                    self.account.smtp_host,
+                    self.account.smtp_port,
+                    context=context,
+                    timeout=SMTP_SOCKET_TIMEOUT,
+                ) as server:
+                    self._smtp_login(server)
+            else:
+                with smtplib.SMTP(
+                    self.account.smtp_host,
+                    self.account.smtp_port,
+                    timeout=SMTP_SOCKET_TIMEOUT,
+                ) as server:
+                    server.ehlo()
+                    if self.account.use_starttls:
+                        server.starttls(context=context)
+                        server.ehlo()
+                    self._smtp_login(server)
+            return True, "SMTP correcto"
+        except Exception as exc:
+            return False, friendly_mail_error(exc)
+
     def test_connection(self) -> tuple[bool, str]:
         try:
             self.connect()
             self.list_folders()
             self.disconnect()
-            return True, "Conexión exitosa"
         except Exception as exc:
-            return False, str(exc)
+            return False, f"IMAP: {friendly_mail_error(exc)}"
+        smtp_ok, smtp_msg = self.test_smtp()
+        if not smtp_ok:
+            return False, f"IMAP correcto, pero SMTP falló: {smtp_msg}"
+        return True, "Conexión IMAP y SMTP correcta"
