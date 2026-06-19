@@ -23,6 +23,12 @@
 
 ### OAuth2 (Gmail y Outlook)
 
+<div align="center">
+
+<img width="457" height="707" alt="OAuth-PyQorreos" src="https://github.com/user-attachments/assets/c38b997a-d175-4073-912b-fb2c319d6d47" />
+
+</div>
+
 1. En PyQorreos: **Archivo → Preferencias → OAuth** y rellena el **Client ID** y el **Client secret** de cada proveedor que uses. También puedes abrir esa pestaña desde **Cuenta → Añadir / Editar** con el botón «Configurar OAuth en Preferencias…».
 2. Registra una aplicación de **escritorio** en el proveedor (las instrucciones paso a paso están en la misma pestaña OAuth):
    - **Google:** [Google Cloud Console](https://console.cloud.google.com/) → APIs → Gmail API activada → Credenciales → ID de cliente OAuth → Aplicación de escritorio. URI de redirección: `http://127.0.0.1`.
