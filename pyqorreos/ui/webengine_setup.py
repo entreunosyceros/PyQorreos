@@ -161,8 +161,12 @@ def _strip_legacy_link_overlay(html: str) -> str:
 
 try:
     from PySide6.QtCore import QUrl
-    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtGui import QAction, QDesktopServices
     from PySide6.QtWebEngineCore import QWebEnginePage
+    from PySide6.QtWebEngineWidgets import QWebEngineView
+    from PySide6.QtWidgets import QMenu
+
+    from pyqorreos.core.link_safety import url_from_loose_text
 
     _EXTERNAL_SCHEMES = frozenset({"http", "https", "mailto"})
 
@@ -198,7 +202,48 @@ try:
             """Enlaces con target=_blank se abren en el navegador externo."""
             return QuietWebEnginePage(self)
 
+    class MailWebEngineView(QWebEngineView):
+        """Visor HTML con menú contextual en español para abrir enlaces."""
+
+        def contextMenuEvent(self, event) -> None:
+            url_to_open = self._context_menu_url()
+            menu = self.createStandardContextMenu(event.pos())
+            if menu is None:
+                menu = QMenu(self)
+            if url_to_open:
+                open_action = QAction("Abrir enlace en el navegador", menu)
+                open_action.triggered.connect(
+                    lambda _checked=False, url=url_to_open: QDesktopServices.openUrl(
+                        QUrl(url)
+                    )
+                )
+                first = menu.actions()[0] if menu.actions() else None
+                menu.insertAction(first, open_action)
+                if first is not None:
+                    menu.insertSeparator(first)
+            if not menu.actions():
+                return
+            menu.popup(event.globalPos())
+            event.accept()
+
+        def _context_menu_url(self) -> str:
+            page = self.page()
+            if page is None:
+                return ""
+            try:
+                data = page.contextMenuData()
+            except Exception:
+                return ""
+            link = data.linkUrl().toString()
+            if link:
+                return link
+            selected = data.selectedText().strip()
+            if selected:
+                return url_from_loose_text(selected) or ""
+            return ""
+
     _HAS_QUIET_PAGE = True
 except ImportError:
     QuietWebEnginePage = None  # type: ignore[misc, assignment]
+    MailWebEngineView = None  # type: ignore[misc, assignment]
     _HAS_QUIET_PAGE = False

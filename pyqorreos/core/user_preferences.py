@@ -35,6 +35,7 @@ class UserPreferences:
     compose_snippets: list[dict[str, str]] = field(
         default_factory=lambda: list(DEFAULT_COMPOSE_SNIPPETS)
     )
+    translate_target_language: str = "es"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -49,6 +50,11 @@ class UserPreferences:
             filtered["compose_snippets"] = normalize_compose_snippets(
                 filtered["compose_snippets"]
             )
+        from pyqorreos.core.translate import normalize_language_code
+
+        filtered["translate_target_language"] = normalize_language_code(
+            str(filtered.get("translate_target_language", "es"))
+        )
         return cls(**filtered)
 
 

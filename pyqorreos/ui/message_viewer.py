@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import json
 
-from PySide6.QtCore import QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -20,16 +21,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyqorreos.core.link_safety import is_suspicious_link
+from pyqorreos.core.link_safety import is_suspicious_link, url_from_loose_text
 
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
 
-    from pyqorreos.ui.webengine_setup import QuietWebEnginePage, sanitize_email_html_for_viewer
+    from pyqorreos.ui.webengine_setup import (
+        MailWebEngineView,
+        QuietWebEnginePage,
+        sanitize_email_html_for_viewer,
+    )
 
     _HAS_WEBENGINE = True
 except ImportError:
     _HAS_WEBENGINE = False
+    MailWebEngineView = None  # type: ignore[misc, assignment]
 
     def sanitize_email_html_for_viewer(html: str) -> str:
         return html
@@ -39,6 +45,7 @@ class MessageViewer(QWidget):
     """Muestra el cuerpo de un correo en HTML o texto plano."""
 
     load_remote_images_requested = Signal()
+    translate_requested = Signal()
     link_hover_changed = Signal(str)
 
     def __init__(self, parent=None) -> None:
@@ -50,6 +57,7 @@ class MessageViewer(QWidget):
         self._stored_base_url = ""
         self._remote_blocked = False
         self._hovered_link_url = ""
+        self._showing_translation = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -65,6 +73,15 @@ class MessageViewer(QWidget):
         self._btn_view_mode.setVisible(False)
         self._btn_view_mode.clicked.connect(self._toggle_view_mode)
         toolbar.addWidget(self._btn_view_mode)
+
+        self._btn_translate = QPushButton("🌐 Traducir")
+        self._btn_translate.setVisible(False)
+        self._btn_translate.setToolTip(
+            "Traducir el mensaje al idioma configurado en Preferencias"
+        )
+        self._btn_translate.clicked.connect(self.translate_requested.emit)
+        toolbar.addWidget(self._btn_translate)
+
         toolbar.addStretch()
         layout.addLayout(toolbar)
 
@@ -82,7 +99,8 @@ class MessageViewer(QWidget):
         layout.addWidget(self._stack, 1)
 
         if _HAS_WEBENGINE:
-            self._web = QWebEngineView()
+            view_cls = MailWebEngineView if MailWebEngineView is not None else QWebEngineView
+            self._web = view_cls()
             self._web.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
             )
@@ -95,16 +113,28 @@ class MessageViewer(QWidget):
             self._stack.addWidget(self._web)
             self._fallback = QTextBrowser()
             self._fallback.setOpenExternalLinks(True)
+            self._fallback.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self._fallback.customContextMenuRequested.connect(
+                lambda pos: self._show_text_browser_link_menu(self._fallback, pos)
+            )
             self._stack.addWidget(self._fallback)
             self._html_widget = self._web
         else:
             self._fallback = QTextBrowser()
             self._fallback.setOpenExternalLinks(True)
+            self._fallback.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self._fallback.customContextMenuRequested.connect(
+                lambda pos: self._show_text_browser_link_menu(self._fallback, pos)
+            )
             self._stack.addWidget(self._fallback)
             self._html_widget = self._fallback
 
         self._text = QTextBrowser()
         self._text.setOpenExternalLinks(True)
+        self._text.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._text.customContextMenuRequested.connect(
+            lambda pos: self._show_text_browser_link_menu(self._text, pos)
+        )
         self._text.setStyleSheet(
             "QTextBrowser { background: #ffffff; color: #1a1a1a; font-size: 11pt; }"
         )
@@ -114,6 +144,23 @@ class MessageViewer(QWidget):
         self._hovered_link_url = ""
         self._link_warning.hide()
         self.link_hover_changed.emit("")
+
+    def _show_text_browser_link_menu(self, browser: QTextBrowser, pos) -> None:
+        menu = browser.createStandardContextMenu(pos)
+        url = browser.anchorAt(pos)
+        if not url:
+            selected = browser.textCursor().selectedText().strip()
+            url = url_from_loose_text(selected) or ""
+        if url:
+            open_action = QAction("Abrir enlace en el navegador", menu)
+            open_action.triggered.connect(
+                lambda _checked=False, link=url: QDesktopServices.openUrl(QUrl(link))
+            )
+            first = menu.actions()[0] if menu.actions() else None
+            menu.insertAction(first, open_action)
+            if first is not None:
+                menu.insertSeparator(first)
+        menu.exec(browser.mapToGlobal(pos))
 
     def _on_link_hovered(self, url: str) -> None:
         if not _HAS_WEBENGINE:
@@ -164,7 +211,79 @@ class MessageViewer(QWidget):
         else:
             self._link_warning.hide()
 
+    def is_showing_translation(self) -> bool:
+        return self._showing_translation
+
+    def set_translate_available(self, available: bool) -> None:
+        self._btn_translate.setVisible(available and not self._showing_translation)
+
+    def show_translated(self, text: str, language_label: str = "") -> None:
+        """Muestra la traducción con maquetado de lectura en el visor HTML."""
+        from pyqorreos.core.translate import translated_text_to_html
+
+        self._clear_link_hover()
+        self._showing_translation = True
+        self._btn_translate.setText("↩ Ver original")
+        self._btn_translate.setVisible(True)
+        self._btn_view_mode.setVisible(False)
+        self._btn_load_images.setVisible(False)
+
+        html = translated_text_to_html(text, language_label)
+        base = QUrl(self._stored_base_url) if self._stored_base_url else QUrl("about:blank")
+        if _HAS_WEBENGINE:
+            page = self._web.page()
+            if page is not None:
+                try:
+                    page.loadFinished.disconnect(self._scroll_content_to_top)
+                except (RuntimeError, TypeError):
+                    pass
+                page.loadFinished.connect(self._scroll_content_to_top)
+            self._web.setHtml(sanitize_email_html_for_viewer(html), base)
+            self._stack.setCurrentWidget(self._web)
+        else:
+            self._fallback.document().setBaseUrl(base)
+            self._fallback.setHtml(html)
+            self._fallback.verticalScrollBar().setValue(0)
+            self._stack.setCurrentWidget(self._fallback)
+
+    def _scroll_content_to_top(self, ok: bool = True) -> None:
+        if not ok or not _HAS_WEBENGINE:
+            return
+        page = self._web.page()
+        if page is None:
+            return
+        try:
+            page.runJavaScript("window.scrollTo(0, 0);")
+        except Exception:
+            pass
+
+    def restore_from_stored(self) -> None:
+        """Vuelve al contenido original del mensaje."""
+        self._showing_translation = False
+        self._btn_translate.setText("🌐 Traducir")
+        self._clear_link_hover()
+        if self._stored_html.strip():
+            self._view_mode = "html"
+            self._btn_view_mode.setText("📄 Modo lectura")
+            self._btn_view_mode.setVisible(True)
+            self._btn_load_images.setVisible(self._remote_blocked)
+            self._render_current()
+        else:
+            self._btn_view_mode.setVisible(bool(self._stored_plain.strip()))
+            self._btn_load_images.setVisible(False)
+            self._text.setPlainText(self._stored_plain or "(Mensaje vacío)")
+            self._stack.setCurrentWidget(self._text)
+        self.set_translate_available(
+            bool(self._stored_html.strip() or self._stored_plain.strip())
+        )
+
+    def _reset_translation_state(self) -> None:
+        self._showing_translation = False
+        self._btn_translate.setText("🌐 Traducir")
+
     def _toggle_view_mode(self) -> None:
+        if self._showing_translation:
+            return
         if not self._stored_html and not self._stored_plain:
             return
         self._clear_link_hover()
@@ -206,6 +325,7 @@ class MessageViewer(QWidget):
         if not html.strip():
             self.show_plain("(Mensaje vacío)")
             return
+        self._reset_translation_state()
         self._clear_link_hover()
         self._stored_html = html
         self._stored_base_url = base_url
@@ -214,12 +334,24 @@ class MessageViewer(QWidget):
         self._btn_view_mode.setText("📄 Modo lectura")
         self._btn_view_mode.setVisible(True)
         self._btn_load_images.setVisible(remote_blocked)
+        self._btn_translate.setVisible(True)
         self._render_current()
 
     def show_plain(self, text: str) -> None:
+        self._reset_translation_state()
         self._clear_link_hover()
         self._stored_plain = text or ""
         self._btn_load_images.setVisible(False)
+        non_translatable = (
+            "",
+            "(Mensaje vacío)",
+            "(Sin contenido)",
+            "Doble clic en el mensaje para abrirlo.",
+            "Cargando mensaje…",
+        )
+        has_content = bool(text and text.strip() not in non_translatable)
+        self._btn_translate.setVisible(has_content)
+        self._btn_view_mode.setVisible(False)
         self._text.setPlainText(text or "(Mensaje vacío)")
         self._stack.setCurrentWidget(self._text)
 
@@ -230,6 +362,8 @@ class MessageViewer(QWidget):
     def clear(self) -> None:
         self._btn_load_images.setVisible(False)
         self._btn_view_mode.setVisible(False)
+        self._btn_translate.setVisible(False)
+        self._reset_translation_state()
         self._clear_link_hover()
         self._stored_html = ""
         self._stored_plain = ""

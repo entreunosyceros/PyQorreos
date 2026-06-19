@@ -621,3 +621,32 @@ def html_to_plain_text(html: str) -> str:
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+_PLAIN_URL_RE = re.compile(
+    r"(?P<url>(?:https?://|www\.)[^\s<>\"']+|mailto:[^\s<>\"']+)",
+    re.IGNORECASE,
+)
+
+
+def linkify_plain_text_line(line: str) -> str:
+    """Escapa una línea de texto y convierte URLs en enlaces HTML."""
+    from html import escape
+
+    from pyqorreos.core.link_safety import trim_trailing_url_punctuation
+
+    parts: list[str] = []
+    last = 0
+    for match in _PLAIN_URL_RE.finditer(line):
+        parts.append(escape(line[last : match.start()]))
+        raw = match.group("url")
+        href = trim_trailing_url_punctuation(raw)
+        suffix = raw[len(href) :]
+        if href.lower().startswith("www."):
+            href = "https://" + href
+        parts.append(
+            f'<a href="{escape(href, quote=True)}">{escape(href)}</a>{escape(suffix)}'
+        )
+        last = match.end()
+    parts.append(escape(line[last:]))
+    return "".join(parts)

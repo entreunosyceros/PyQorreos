@@ -266,6 +266,40 @@ class EnhanceHtmlWorker(QThread):
             self.signals.error.emit(str(exc))
 
 
+class TranslateMessageWorker(QThread):
+    """Traduce el cuerpo y asunto de un mensaje en segundo plano."""
+
+    def __init__(
+        self,
+        uid: str,
+        body_text: str,
+        subject: str,
+        target_lang: str,
+    ) -> None:
+        super().__init__()
+        self.uid = uid
+        self.body_text = body_text
+        self.subject = subject
+        self.target_lang = target_lang
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            from pyqorreos.core.translate import translate_text
+
+            body = translate_text(self.body_text, self.target_lang)
+            subject = (
+                translate_text(self.subject, self.target_lang)
+                if self.subject.strip()
+                else ""
+            )
+            self.signals.finished.emit(
+                (self.uid, self.target_lang, body, subject)
+            )
+        except Exception as exc:
+            self.signals.error.emit(str(exc))
+
+
 class SetSeenWorker(QThread):
     def __init__(
         self,

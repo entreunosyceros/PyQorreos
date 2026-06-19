@@ -153,6 +153,12 @@ def main() -> int:
             cwd=PROJECT_DIR,
             env=env,
         )
+        if result.returncode != 0:
+            print(
+                f"PyQorreos no pudo iniciarse (código {result.returncode}). "
+                "Ejecuta: .venv/bin/python run_app.py para ver el error.",
+                file=sys.stderr,
+            )
         return result.returncode
 
     except subprocess.CalledProcessError as exc:

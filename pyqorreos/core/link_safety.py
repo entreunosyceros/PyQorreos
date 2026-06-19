@@ -46,3 +46,25 @@ def is_suspicious_link(visible_text: str, href: str) -> bool:
     if not claimed_domains:
         return False
     return any(not _hosts_match(real, claimed) for claimed in claimed_domains)
+
+
+def trim_trailing_url_punctuation(url: str) -> str:
+    """Quita puntuación final que suele pegarse a URLs en texto plano."""
+    while url and url[-1] in ".,;:!?)'\"":
+        if url[-1] == ")" and url.count("(") >= url.count(")"):
+            break
+        url = url[:-1]
+    return url
+
+
+def url_from_loose_text(text: str) -> str | None:
+    """Interpreta una selección de texto como URL si es posible."""
+    text = trim_trailing_url_punctuation((text or "").strip())
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered.startswith(("http://", "https://", "mailto:")):
+        return text
+    if lowered.startswith("www."):
+        return "https://" + text
+    return None

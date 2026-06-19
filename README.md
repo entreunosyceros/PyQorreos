@@ -27,19 +27,27 @@ Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**.
 ### Bandeja y sincronización
 - Vista de tres paneles: carpetas | lista de mensajes | lectura
 - Árbol de carpetas con iconos SVG y contador de no leídos
+- Crear carpetas y subcarpetas en el servidor IMAP; eliminar carpetas de usuario (p. ej. restos de otros clientes como `Mailspring`)
 - Sincronización incremental (solo descarga mensajes nuevos)
 - Sincronización en segundo plano (IMAP IDLE + polling) configurable en preferencias (por defecto cada 15 minutos)
 - Caché local SQLite para abrir la bandeja al instante
 - Paginación configurable y barra de progreso de sincronización
+- Indicador de cuota de almacenamiento IMAP bajo el árbol de carpetas
 - Clasificación automática: normal, importante, spam (con filtro y colores)
+- Reglas de remitente al marcar spam o importante (aprendizaje persistente)
 - Búsqueda por asunto o remitente, filtro «Solo no leídos» y ordenación
 - Vista de conversaciones (agrupación por hilos, opcional en preferencias)
-- Notificaciones de correo nuevo en la bandeja del sistema
+- Notificaciones de correo nuevo en la bandeja del sistema (remitente y asunto)
 
 ### Lectura de mensajes
+- **Doble clic** (o `Enter`) en un mensaje para abrirlo; un solo clic solo muestra vista previa (asunto y remitente)
 - Visor HTML con Qt WebEngine (maquetado fiel al correo original)
+- Modos de vista: HTML original, modo lectura y texto plano
 - Imágenes embebidas (cid); imágenes remotas bloqueables por privacidad
-- Botón «Mostrar imágenes remotas» bajo demanda
+- Botón «Mostrar imágenes remotas» bajo demanda (descarga en segundo plano)
+- **Traducción** bajo demanda al idioma configurado en Preferencias (botón «Traducir» / «Ver original»)
+- Advertencia anti-phishing al pasar el ratón sobre enlaces sospechosos; la URL se muestra en la barra de estado
+- List-Unsubscribe: botón y menú contextual para darse de baja de listas de correo
 - Adjuntos: listar, abrir y guardar desde el panel del lector
 - Caché de cuerpos: los mensajes ya abiertos se muestran sin volver a descargar
 - Precarga del siguiente mensaje de la lista
@@ -47,15 +55,18 @@ Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**.
 ### Acciones sobre el correo
 - Responder, responder a todos, reenviar y eliminar
 - Selección múltiple: marcar, eliminar o mover varios mensajes a la vez
-- Mover mensajes entre carpetas (menú contextual)
+- Mover mensajes entre carpetas (menú contextual o botón «Mover a…»)
 - Vaciar papelera desde el menú contextual de la carpeta
+- Exportar mensaje a `.eml` o carpeta completa a `.mbox`
 - Marcar como leído / no leído
 - Marcar categoría (importante, spam, normal) desde barra, menú o clic derecho
-- Menú contextual en el listado (copiar remitente, actualizar carpeta…)
-- Atajos: `Ctrl+R`, `Ctrl+Shift+R`, `Ctrl+L`, `Supr`, `F5`
+- Menú contextual en el listado (abrir, copiar remitente, actualizar carpeta…)
+- Atajos: `Ctrl+R`, `Ctrl+Shift+R`, `Ctrl+L`, `Supr`, `F5`, `Enter` (abrir mensaje)
 
 ### Redacción
 - Editor enriquecido: negrita, cursiva, subrayado, listas, color, enlaces e imágenes
+- **Plantillas** de texto rápido (pestaña «Plantillas» en Preferencias; menú en el editor al redactar)
+- Aviso si el cuerpo menciona adjuntos pero no hay ninguno seleccionado
 - Adjuntar archivos al enviar
 - Envío HTML + texto plano por SMTP
 - Borradores precargados al responder o reenviar (cita HTML del mensaje original)
@@ -72,6 +83,7 @@ Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**.
 - Python 3.10+
 - PySide6 (incluye Qt WebEngine para el visor HTML)
 - keyring
+- deep-translator (traducción de mensajes bajo demanda)
 
 ## Instalación
 
@@ -97,11 +109,12 @@ python main.py
 2. Usa **Probar conexión** en el diálogo de cuenta antes de guardar.
 3. Opcional: define una **firma** en el diálogo de cuenta.
 4. Cambia de cuenta con el desplegable **Cuenta:**.
-5. Navega por el **árbol de carpetas**; clic izquierdo en un mensaje para abrirlo.
+5. Navega por el **árbol de carpetas**; **doble clic** en un mensaje (o `Enter`) para abrirlo.
 6. Usa la **barra de búsqueda** y los filtros sobre la lista de mensajes.
-7. **Redactar** (`Ctrl+N`) o **Responder** (`Ctrl+R`) con el editor enriquecido.
-8. Clic derecho en el listado o en una carpeta para más acciones.
-9. Ajusta el comportamiento en **Cuenta → Preferencias…** (`Ctrl+,`).
+7. En el visor: **Mostrar imágenes remotas**, **Traducir**, **Modo lectura** o **Texto plano** según necesites.
+8. **Redactar** (`Ctrl+N`) o **Responder** (`Ctrl+R`) con el editor enriquecido y plantillas.
+9. Clic derecho en el listado, en una carpeta o en la bandeja del sistema para más acciones.
+10. Ajusta el comportamiento en **Archivo → Preferencias…** (`Ctrl+,`): sync, imágenes, idioma de traducción, plantillas…
 
 ## Atajos de teclado
 
@@ -113,6 +126,7 @@ python main.py
 | `Ctrl+L` | Reenviar |
 | `Ctrl+B` / `I` / `U` | Negrita / cursiva / subrayado (en el editor) |
 | `Delete` | Eliminar mensaje(s) seleccionado(s) |
+| `Enter` | Abrir mensaje seleccionado (doble clic también) |
 | `F5` | Actualizar carpeta |
 | `Ctrl+,` | Preferencias |
 | `Ctrl+Q` | Salir |
@@ -136,7 +150,12 @@ PyQorreos/
     │   ├── mail_cache.py           # Caché SQLite de cabeceras y cuerpos
     │   ├── classifier.py           # Clasificación spam / importante
     │   ├── email_html.py           # Preparación HTML para lectura
+    │   ├── translate.py            # Traducción de mensajes (deep-translator)
+    │   ├── list_unsubscribe.py     # Cabecera List-Unsubscribe
+    │   ├── link_safety.py          # Detección de enlaces sospechosos
+    │   ├── export_mail.py          # Exportación .eml / .mbox
     │   ├── compose_email.py        # HTML, adjuntos y borradores
+    │   ├── compose_utils.py        # Utilidades al redactar (p. ej. adjuntos)
     │   ├── reply_utils.py          # Borradores de respuesta / reenvío
     │   ├── settings.py             # Configuración y keyring
     │   ├── user_preferences.py     # Preferencias de la aplicación
@@ -155,8 +174,9 @@ PyQorreos/
         ├── account_dialog.py       # Alta/edición de una cuenta
         ├── accounts_manager_dialog.py
         ├── about_dialog.py
-        ├── preferences_dialog.py   # Preferencias de la aplicación
+        ├── preferences_dialog.py   # Preferencias (general + plantillas)
         ├── background_sync.py      # IDLE y sync en segundo plano
+        ├── notification_utils.py   # Texto de notificaciones de correo nuevo
         ├── folder_tree_widget.py   # Árbol de carpetas
         ├── folder_icons.py         # Iconos por tipo de carpeta
         ├── system_tray.py
@@ -170,7 +190,7 @@ PyQorreos/
 |-----------|-----------|
 | `~/.config/pyqorreos/accounts.json` | Cuentas configuradas |
 | `~/.config/pyqorreos/classification.json` | Reglas de clasificación |
-| `~/.config/pyqorreos/preferences.json` | Preferencias (sync, imágenes, hilos…) |
+| `~/.config/pyqorreos/preferences.json` | Preferencias (sync, imágenes, hilos, idioma de traducción, plantillas…) |
 | `~/.config/pyqorreos/mail_cache.db` | Caché local de correos |
 | Llavero del sistema | Contraseñas y tokens OAuth (vía `keyring`) |
 
@@ -181,7 +201,15 @@ PyQorreos/
 - En Linux, el llavero usa Secret Service (GNOME Keyring, KWallet, etc.).
 - Los avisos de Chromium/WebEngine en terminal están filtrados cuando es posible; no afectan al uso normal.
 - Por defecto las **imágenes remotas** están bloqueadas; puedes mostrarlas con el botón del visor o desactivar el bloqueo en Preferencias.
+- La **traducción** solo se ejecuta al pulsar «Traducir»; el texto se envía a un servicio en línea gratuito ([deep-translator](https://github.com/nidhaloff/deep-translator)). Configura el idioma destino en Preferencias → General.
+- Si en Gmail aparece una carpeta **Mailspring** (u otra de un cliente antiguo), puedes eliminarla con clic derecho en el árbol → **Eliminar carpeta…** (las carpetas del sistema como INBOX o `[Gmail]/…` están protegidas).
+- La bandeja del sistema incluye acceso directo a **Bandeja de entrada** de la cuenta seleccionada.
 
 ## Licencia
 
 MIT
+
+
+## 📧📧PyQorreos📧📧
+
+Desarrollado con pocas horas de sueño para la comunidad por entreunosyceros por que Thunderbird me está fallando

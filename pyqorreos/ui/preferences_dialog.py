@@ -33,6 +33,7 @@ from pyqorreos.core.user_preferences import (
     UserPreferences,
     normalize_compose_snippets,
 )
+from pyqorreos.core.translate import TRANSLATION_LANGUAGES, language_label
 
 
 class PreferencesDialog(QDialog):
@@ -149,6 +150,25 @@ class PreferencesDialog(QDialog):
         }
         self.sort_combo.setCurrentIndex(sort_map.get(self._prefs.sort_by, 0))
         view_form.addRow("Ordenar por:", self.sort_combo)
+
+        self.translate_lang = QComboBox()
+        for code, label in TRANSLATION_LANGUAGES:
+            self.translate_lang.addItem(label, code)
+        target = self._prefs.translate_target_language
+        idx = self.translate_lang.findData(target)
+        self.translate_lang.setCurrentIndex(idx if idx >= 0 else 0)
+        self.translate_lang.setToolTip(
+            "Idioma al que se traducirán los correos al pulsar «Traducir» en el visor"
+        )
+        view_form.addRow("Traducir correos al:", self.translate_lang)
+
+        translate_note = QLabel(
+            "La traducción envía el texto del mensaje a un servicio en línea gratuito. "
+            "Solo se traduce cuando pulsas el botón en el visor."
+        )
+        translate_note.setWordWrap(True)
+        translate_note.setStyleSheet("color: #666; font-size: 9pt;")
+        view_form.addRow(translate_note)
 
         layout.addWidget(view_group)
 
@@ -333,4 +353,5 @@ class PreferencesDialog(QDialog):
             headers_only_large_folders=self.large_headers.isChecked(),
             delete_from_server_after_download=self.delete_after_download.isChecked(),
             compose_snippets=copy.deepcopy(self._snippets),
+            translate_target_language=self.translate_lang.currentData(),
         )

@@ -56,6 +56,7 @@ from pyqorreos.core.mail_service import MailMessage, MailService, MailSummary, n
 from pyqorreos.core.oauth import AuthMethod, detect_oauth_provider, oauth_not_configured_message
 from pyqorreos.core.reply_utils import ComposeDraft, build_forward, build_reply
 from pyqorreos.core.settings import Settings
+from pyqorreos.core.translate import language_label
 from pyqorreos.core.user_preferences import UserPreferences, load_preferences, save_preferences
 from pyqorreos.ui.about_dialog import AboutDialog, LOGO_PATH
 from pyqorreos.ui.account_dialog import AccountDialog
@@ -86,6 +87,7 @@ from pyqorreos.ui.workers import (
     SetSeenWorker,
     StorageQuotaWorker,
     SyncFolderWorker,
+    TranslateMessageWorker,
     UnsubscribeWorker,
 )
 
@@ -236,6 +238,11 @@ class MainWindow(QMainWindow):
         self._pending_enhance_uid: str | None = None
         self._enhance_generation = 0
         self._explicit_image_load = False
+        self._translate_worker: TranslateMessageWorker | None = None
+        self._pending_translate_uid: str | None = None
+        self._translate_generation = 0
+        self._translation_cache: dict[tuple[str, str], dict[str, str]] = {}
+        self._original_subject = ""
         self._sync_new_total = 0
         self._account_combo_blocked = False
         self._prefs: UserPreferences = load_preferences()
@@ -509,6 +516,7 @@ class MainWindow(QMainWindow):
         self.message_viewer.load_remote_images_requested.connect(
             self._load_remote_images_for_current
         )
+        self.message_viewer.translate_requested.connect(self._on_translate_requested)
         self.message_viewer.link_hover_changed.connect(self._on_viewer_link_hover)
         reader_layout.addWidget(self.message_viewer, 1)
         splitter.addWidget(reader_panel)
@@ -695,6 +703,19 @@ class MainWindow(QMainWindow):
             self._reader_row2.addWidget(btn)
             self._reader_buttons.append(btn)
         self._reader_row2.addStretch()
+
+    def _detach_translate_worker(self) -> None:
+        self._pending_translate_uid = None
+        if not self._translate_worker:
+            return
+        try:
+            self._translate_worker.signals.finished.disconnect(self._on_message_translated)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            self._translate_worker.signals.error.disconnect(self._on_translate_error)
+        except (RuntimeError, TypeError):
+            pass
 
     def _detach_enhance_worker(self) -> None:
         """Ignora el resultado de una mejora HTML en curso (p. ej. al cambiar de mensaje)."""
@@ -964,7 +985,6 @@ class MainWindow(QMainWindow):
         cuenta_menu.addAction(self._act_add_account)
         cuenta_menu.addAction(self._act_manage_accounts)
         cuenta_menu.addSeparator()
-        cuenta_menu.addAction(self._act_preferences)
         cuenta_menu.addAction(self._act_refresh)
 
         correo_menu = menu.addMenu("Correo")
@@ -980,6 +1000,7 @@ class MainWindow(QMainWindow):
         correo_menu.addAction(self._act_mark_normal)
 
         menu.addSeparator()
+        menu.addAction(self._act_preferences)
         menu.addAction(self._act_quit)
         return menu
 
@@ -1053,13 +1074,14 @@ class MainWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("Archivo")
+        file_menu.addAction(self._act_preferences)
+        file_menu.addSeparator()
         file_menu.addAction(self._act_quit)
 
         cuenta_menu = self.menuBar().addMenu("Cuenta")
         cuenta_menu.addAction(self._act_add_account)
         cuenta_menu.addAction(self._act_manage_accounts)
         cuenta_menu.addSeparator()
-        cuenta_menu.addAction(self._act_preferences)
         cuenta_menu.addAction(self._act_refresh)
 
         folders_menu = self.menuBar().addMenu("Carpetas")
@@ -1086,7 +1108,6 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(self._act_export_folder)
 
         ayuda_menu = self.menuBar().addMenu("Ayuda")
-        ayuda_menu.addAction(self._act_preferences)
         ayuda_menu.addAction(self._act_about)
 
     def _show_preferences(self) -> None:
@@ -1568,6 +1589,8 @@ class MainWindow(QMainWindow):
         self._enhance_generation += 1
         self._detach_enhance_worker()
         self._explicit_image_load = False
+        self._translate_generation += 1
+        self._detach_translate_worker()
 
     def _cancel_sync(self) -> None:
         if self._sync_worker and self._sync_worker.isRunning():
@@ -2064,9 +2087,12 @@ class MainWindow(QMainWindow):
         self._enhance_generation += 1
         self._detach_enhance_worker()
         self._explicit_image_load = False
+        self._translate_generation += 1
+        self._detach_translate_worker()
 
         self._pending_fetch_uid = None
         self._current_message = message
+        self._original_subject = message.subject
         self._update_message_actions()
         summary = _selected_summary(message.uid, self._all_messages)
         deleted_from_server = self._prefs.delete_from_server_after_download
@@ -2125,6 +2151,8 @@ class MainWindow(QMainWindow):
                 self._start_html_enhance(message)
         else:
             self.message_viewer.show_plain(message.body_text or "(Mensaje vacío)")
+
+        self._update_translate_button()
 
         row = self.message_table.currentRow()
         if row >= 0:
@@ -2201,6 +2229,111 @@ class MainWindow(QMainWindow):
         self._explicit_image_load = False
         self.status_bar.showMessage("No se pudieron cargar las imágenes remotas")
         QMessageBox.warning(self, "Imágenes remotas", message)
+
+    def _message_body_for_translation(self, message: MailMessage) -> str:
+        from pyqorreos.core.email_html import html_to_plain_text
+        from pyqorreos.core.translate import normalize_translation_source
+
+        plain = (message.body_text or "").strip()
+        if plain in ("", "(Sin contenido)", "(Mensaje vacío)"):
+            plain = html_to_plain_text(message.body_html)
+        return normalize_translation_source(plain)
+
+    def _update_translate_button(self) -> None:
+        if not self._current_message:
+            self.message_viewer.set_translate_available(False)
+            return
+        body = self._message_body_for_translation(self._current_message)
+        self.message_viewer.set_translate_available(bool(body))
+
+    def _on_translate_requested(self) -> None:
+        if self.message_viewer.is_showing_translation():
+            self._restore_original_message_view()
+            return
+        if not self._current_message:
+            return
+        body = self._message_body_for_translation(self._current_message)
+        if not body:
+            self.status_bar.showMessage("No hay texto que traducir en este mensaje")
+            return
+
+        uid = self._current_message.uid
+        target = self._prefs.translate_target_language
+        cached = self._translation_cache.get((uid, target))
+        if cached and cached.get("body"):
+            self._apply_translation(cached["body"], cached.get("subject", ""))
+            return
+
+        if (
+            self._translate_worker
+            and self._translate_worker.isRunning()
+            and self._pending_translate_uid == uid
+        ):
+            self.status_bar.showMessage(
+                f"Traduciendo al {language_label(target)}…"
+            )
+            return
+
+        self._detach_translate_worker()
+        generation = self._translate_generation
+        self._pending_translate_uid = uid
+        lang_label = language_label(target)
+        self.status_bar.showMessage(f"Traduciendo al {lang_label}…")
+        worker = TranslateMessageWorker(
+            uid,
+            body,
+            self._current_message.subject,
+            target,
+        )
+        worker.signals.finished.connect(
+            lambda payload, g=generation: self._on_message_translated(payload, g)
+        )
+        worker.signals.error.connect(
+            lambda message, g=generation: self._on_translate_error(message, g)
+        )
+        worker.start()
+        self._translate_worker = worker
+        self._workers.append(worker)
+
+    def _apply_translation(self, body: str, subject: str) -> None:
+        if not self._current_message:
+            return
+        target = self._prefs.translate_target_language
+        lang_label = language_label(target)
+        self.message_viewer.show_translated(body, language_label=lang_label)
+        if subject:
+            self.subject_label.setText(subject)
+        self.status_bar.showMessage(f"Mensaje traducido al {lang_label}")
+
+    def _restore_original_message_view(self) -> None:
+        if self._original_subject:
+            self.subject_label.setText(self._original_subject)
+        self.message_viewer.restore_from_stored()
+        self.status_bar.showMessage("Mostrando mensaje original")
+
+    def _on_message_translated(self, payload, generation: int | None = None) -> None:
+        uid, target_lang, body, subject = payload
+        if generation is not None and generation != self._translate_generation:
+            return
+        if self._pending_translate_uid != uid:
+            return
+        if not self._current_message or self._current_message.uid != uid:
+            return
+        self._pending_translate_uid = None
+        self._translation_cache[(uid, target_lang)] = {
+            "body": body,
+            "subject": subject,
+        }
+        if target_lang != self._prefs.translate_target_language:
+            return
+        self._apply_translation(body, subject)
+
+    def _on_translate_error(self, message: str, generation: int | None = None) -> None:
+        if generation is not None and generation != self._translate_generation:
+            return
+        self._pending_translate_uid = None
+        self.status_bar.showMessage("No se pudo traducir el mensaje")
+        QMessageBox.warning(self, "Traducción", message)
 
     def _save_attachment(self, part_index: int) -> None:
         uid = self._selected_message_uid()
