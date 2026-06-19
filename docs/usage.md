@@ -16,6 +16,11 @@ La ventana permanece usable mientras conecta; no hace falta pulsar «Actualizar�
 
 ## Primeros pasos
 
+<div align="center">
+<img width="765" height="475" alt="cuentas" src="https://github.com/user-attachments/assets/368a3d39-5d78-425e-a394-e63d830bf38f" />
+
+</div>
+
 1. **Cuenta → Gestionar cuentas** (o **Gestionar…** en la barra superior) para añadir una o más cuentas.
 2. Usa **Probar conexión** en el diálogo de cuenta antes de guardar.
 3. Opcional: define una **firma** en el diálogo de cuenta.
