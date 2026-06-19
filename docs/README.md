@@ -1,4 +1,7 @@
 # Documentación de PyQorreos
+<div align="center">
+<img width="1408" height="768" alt="PyQorreos" src="https://github.com/user-attachments/assets/19640ae3-ae11-419d-b033-9e1ee7fbcfc2" />
+</div>
 
 Guías y referencia del proyecto. Empieza por [Instalación](installation.md) o [Uso rápido](usage.md).
 
