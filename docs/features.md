@@ -4,6 +4,9 @@
 
 Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [Uso rápido](usage.md).
 
+<div align="center">
+<img width="640" height="797" alt="preferencias-pyqcorreos" src="https://github.com/user-attachments/assets/38dec139-a4c5-49ab-94d5-da9f6372878e" />
+</div>
 
 ## Cuentas y conexión
 
