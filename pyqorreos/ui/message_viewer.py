@@ -316,6 +316,28 @@ class MessageViewer(QWidget):
             bool(self._stored_html.strip() or self._stored_plain.strip())
         )
 
+    def html_source_for_load(self) -> str:
+        """HTML base para descargar imágenes remotas (con metadatos de bloqueo)."""
+        if not self._stored_html.strip():
+            return self._stored_html
+        if self._remote_blocked:
+            from pyqorreos.core.email_html import block_remote_images_in_html
+
+            return block_remote_images_in_html(self._stored_html)
+        return self._stored_html
+
+    def _html_for_viewer(self) -> str:
+        html = self._stored_html
+        if self._remote_blocked:
+            from pyqorreos.core.email_html import block_remote_images_in_html
+
+            html = block_remote_images_in_html(html)
+        if self._view_mode == "reading":
+            from pyqorreos.core.email_html import apply_reading_mode_styles
+
+            html = apply_reading_mode_styles(html)
+        return html
+
     def _reset_translation_state(self) -> None:
         self._showing_translation = False
         self._btn_translate.setText("🌐 Traducir")
@@ -346,11 +368,7 @@ class MessageViewer(QWidget):
         if not self._stored_html.strip():
             self.show_plain(self._stored_plain or "(Mensaje vacío)")
             return
-        html = self._stored_html
-        if self._view_mode == "reading":
-            from pyqorreos.core.email_html import apply_reading_mode_styles
-
-            html = apply_reading_mode_styles(html)
+        html = self._html_for_viewer()
         base = QUrl(self._stored_base_url) if self._stored_base_url else QUrl("about:blank")
         if _HAS_WEBENGINE:
             self._web.setHtml(sanitize_email_html_for_viewer(html), base)

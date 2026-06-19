@@ -208,6 +208,7 @@ class MainWindow(QMainWindow):
         self._splitter_drag_active = False
         self._ui_compact = False
         self._ui_narrow = False
+        self._manual_refresh_active = False
         self._reader_label_mode = ""
 
         self.setWindowTitle("PyQorreos")
@@ -720,8 +721,10 @@ class MainWindow(QMainWindow):
 
         self._act_quit = QAction("Salir", self)
         self._setup_menu_action(self._act_quit, "quit", "Salir")
-        self._act_quit.setShortcut("Ctrl+Q")
+        self._act_quit.setShortcut(QKeySequence.StandardKey.Quit)
+        self._act_quit.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self._act_quit.triggered.connect(self._quit_application)
+        self.addAction(self._act_quit)
 
         self._act_add_account = QAction("Añadir cuenta…", self)
         self._setup_menu_action(self._act_add_account, "user-plus", "Añadir cuenta…")
@@ -747,7 +750,9 @@ class MainWindow(QMainWindow):
             self._act_refresh, "refresh", "Actualizar", toolbar_compact=""
         )
         self._act_refresh.setShortcut("F5")
-        self._act_refresh.setToolTip("Actualizar carpeta actual (F5)")
+        self._act_refresh.setToolTip(
+            "Buscar correo nuevo en el servidor (F5)"
+        )
         self._act_refresh.triggered.connect(self._refresh)
 
         self._act_reply = QAction("Responder", self)
@@ -1441,16 +1446,27 @@ class MainWindow(QMainWindow):
         os._exit(code)
 
     def _finalize_process_exit(self) -> None:
-        """Respaldo si se usa QApplication.quit() sin _exit_process."""
-        self._exit_process(0)
+        """Respaldo si algo invoca QApplication.quit()."""
+        if not self._quitting:
+            self._quitting = True
+            self._finish_quit()
+        else:
+            self._exit_process(0)
 
     def _quit_application(self) -> None:
-        """Cierra la aplicación por completo (menú Archivo / bandeja)."""
+        """Cierra la aplicación por completo (menú Archivo / bandeja / Ctrl+C)."""
         import os
 
         if self._quitting:
             os._exit(0)
         self._quitting = True
+        # Diferir un ciclo del event loop: evita cortar el menú/atajo a medias.
+        QTimer.singleShot(0, self._finish_quit)
+
+    def _finish_quit(self) -> None:
+        """Apagado rápido y salida del proceso (devuelve el prompt a la terminal)."""
+        import os
+
         try:
             if self._tray:
                 self._tray.hide()
@@ -1991,57 +2007,73 @@ class MainWindow(QMainWindow):
                 self._render_message_table()
         self._refresh_folder_unread_counts()
 
-    def _start_folder_sync(self, folder: str) -> None:
+    def _start_folder_sync(self, folder: str, *, manual_refresh: bool = False) -> None:
         """Carga caché local al instante y sincroniza con el servidor en segundo plano."""
         if not self.mail_service or not self.current_account:
             return
+
+        same_folder = manual_refresh and folder == self._current_folder
 
         self._cancel_sync()
         if self._load_folder_worker and self._load_folder_worker.isRunning():
             self._load_folder_worker.wait(2000)
         self._load_folder_worker = None
         generation = self._sync_generation
-        self._cancel_message_fetch()
+        self._manual_refresh_active = same_folder
         self._current_folder = folder
-        self._current_page = 0
-        self._current_message = None
-        self._pending_fetch_uid = None
-        self._set_message_actions_enabled(False)
-        self.subject_label.setText("Selecciona un mensaje")
-        self.meta_label.setText("")
-        self.message_viewer.clear()
-        self.attachment_panel.clear()
 
-        self.search_edit.blockSignals(True)
-        self.search_edit.clear()
-        self.search_edit.blockSignals(False)
-
-        self._all_messages = []
-        self._render_message_table()
-        count = self.mail_cache.folder_count(self.current_account.id, folder)
-        if count:
-            self.status_bar.showMessage(
-                f"Cargando {count:,} mensajes en caché — sincronizando {folder}…".replace(",", ".")
-            )
+        if same_folder:
+            cached = self.mail_cache.load_folder(self.current_account.id, folder)
+            if cached:
+                self._all_messages = cached
+                self._render_message_table()
+            self.status_bar.showMessage(f"Buscando correo nuevo en {folder}…")
         else:
-            self.status_bar.showMessage(f"Sincronizando {folder}…")
+            self._cancel_message_fetch()
+            self._current_page = 0
+            self._current_message = None
+            self._pending_fetch_uid = None
+            self._set_message_actions_enabled(False)
+            self.subject_label.setText("Selecciona un mensaje")
+            self.meta_label.setText("")
+            self.message_viewer.clear()
+            self.attachment_panel.clear()
 
-        load_worker = LoadFolderWorker(
-            self.mail_cache,
-            self.current_account.id,
-            folder,
-        )
-        self._load_folder_worker = load_worker
-        load_worker.signals.finished.connect(
-            lambda summaries, g=generation, f=folder: self._on_folder_cache_loaded(
-                summaries, g, f
+            self.search_edit.blockSignals(True)
+            self.search_edit.clear()
+            self.search_edit.blockSignals(False)
+
+            self._all_messages = []
+            self._render_message_table()
+            count = self.mail_cache.folder_count(self.current_account.id, folder)
+            if count:
+                self.status_bar.showMessage(
+                    f"Cargando {count:,} mensajes en caché — sincronizando {folder}…".replace(
+                        ",", "."
+                    )
+                )
+            else:
+                self.status_bar.showMessage(f"Sincronizando {folder}…")
+
+        if not same_folder or not self._all_messages:
+            load_worker = LoadFolderWorker(
+                self.mail_cache,
+                self.current_account.id,
+                folder,
             )
-        )
-        load_worker.signals.error.connect(
-            lambda msg, g=generation, f=folder: self._on_folder_cache_error(msg, g, f)
-        )
-        load_worker.start()
-        self._track_worker(load_worker)
+            self._load_folder_worker = load_worker
+            load_worker.signals.finished.connect(
+                lambda summaries, g=generation, f=folder: self._on_folder_cache_loaded(
+                    summaries, g, f
+                )
+            )
+            load_worker.signals.error.connect(
+                lambda msg, g=generation, f=folder: self._on_folder_cache_error(
+                    msg, g, f
+                )
+            )
+            load_worker.start()
+            self._track_worker(load_worker)
 
         self.sync_progress.setVisible(True)
         self.sync_progress.setValue(0)
@@ -2053,6 +2085,7 @@ class MainWindow(QMainWindow):
             self.current_account.id,
             folder,
             self.mail_cache,
+            fresh_mailbox=manual_refresh,
         )
         worker.signals.batch_ready.connect(
             lambda payload, g=generation, f=folder: self._on_sync_batch(payload, g, f)
@@ -2131,7 +2164,7 @@ class MainWindow(QMainWindow):
                     by_uid[summary.uid] = len(self._all_messages) - 1
         self._sync_new_total = total
         self._on_sync_progress(done, total, generation, folder)
-        if self._current_page == 0:
+        if self._current_page == 0 or self._manual_refresh_active:
             self._render_message_table()
 
     def _on_sync_progress(
@@ -2142,8 +2175,8 @@ class MainWindow(QMainWindow):
         if total <= 0:
             self.sync_progress.setMaximum(0)
             self.sync_progress.setValue(0)
-            self.sync_progress.setFormat("Comprobando mensajes nuevos…")
-            self.status_bar.showMessage("Comprobando mensajes nuevos…")
+            self.sync_progress.setFormat("Buscando correo nuevo…")
+            self.status_bar.showMessage("Buscando correo nuevo en el servidor…")
             return
         self.sync_progress.setMaximum(total)
         self.sync_progress.setValue(done)
@@ -2170,7 +2203,9 @@ class MainWindow(QMainWindow):
                 messages = cached
 
         self._all_messages = messages
-        self._current_page = 0
+        if not self._manual_refresh_active:
+            self._current_page = 0
+        self._manual_refresh_active = False
         self._render_message_table()
         if new_summaries:
             detail = f" — {len(new_summaries)} nuevos"
@@ -2781,7 +2816,7 @@ class MainWindow(QMainWindow):
         worker = EnhanceHtmlWorker(
             self.mail_service,
             uid,
-            self._current_message.body_html,
+            self.message_viewer.html_source_for_load(),
             self._current_folder,
         )
         worker.signals.finished.connect(
@@ -3095,12 +3130,17 @@ class MainWindow(QMainWindow):
         explicit = self._explicit_image_load
         self._explicit_image_load = False
         from pyqorreos.core.email_html import (
-            BLOCKED_IMAGE_PLACEHOLDER_MARKER,
             base_url_for_message,
+            count_blocked_image_placeholders,
         )
 
-        if html == self._current_message.body_html and not explicit:
-            if BLOCKED_IMAGE_PLACEHOLDER_MARKER in html:
+        old_html = self._current_message.body_html
+        old_blocked = count_blocked_image_placeholders(old_html)
+        new_blocked = count_blocked_image_placeholders(html)
+        improved = html != old_html or new_blocked < old_blocked
+
+        if not explicit and html == old_html:
+            if new_blocked > 0:
                 self.status_bar.showMessage(
                     "No se pudieron descargar algunas imágenes remotas"
                 )
@@ -3109,10 +3149,19 @@ class MainWindow(QMainWindow):
                     "No hay imágenes remotas pendientes de cargar"
                 )
             return
-        if html == self._current_message.body_html and BLOCKED_IMAGE_PLACEHOLDER_MARKER in html:
-            self.status_bar.showMessage(
-                "No se pudieron descargar algunas imágenes remotas"
-            )
+
+        if explicit and not improved:
+            if new_blocked > 0:
+                self.status_bar.showMessage(
+                    "No se pudieron descargar algunas imágenes remotas"
+                )
+            else:
+                self.message_viewer.show_html(
+                    html,
+                    base_url_for_message(self._current_message.sender),
+                    remote_blocked=False,
+                )
+                self.status_bar.showMessage("Imágenes remotas cargadas")
             return
 
         self._current_message = MailMessage(
@@ -3138,7 +3187,12 @@ class MainWindow(QMainWindow):
             )
         base = base_url_for_message(self._current_message.sender)
         self.message_viewer.show_html(html, base, remote_blocked=False)
-        self.status_bar.showMessage("Imágenes remotas cargadas")
+        if new_blocked > 0:
+            self.status_bar.showMessage(
+                "Imágenes remotas cargadas (algunas no disponibles)"
+            )
+        else:
+            self.status_bar.showMessage("Imágenes remotas cargadas")
 
     def _mark_selected_seen(self, seen: bool) -> None:
         uid = self._selected_message_uid()
@@ -3358,9 +3412,15 @@ class MainWindow(QMainWindow):
         )
 
     def _refresh(self) -> None:
-        folder = selected_folder_path(self.folder_tree)
+        folder = (
+            selected_folder_path(self.folder_tree)
+            or self._current_folder
+            or "INBOX"
+        )
         if folder and self.mail_service:
-            self._start_folder_sync(folder)
+            if selected_folder_path(self.folder_tree) != folder:
+                self._refresh_folder_tree(select_folder=folder)
+            self._start_folder_sync(folder, manual_refresh=True)
         elif self.current_account:
             self._connect_account(self.current_account)
 
@@ -3496,10 +3556,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
-                self._quitting = True
-                self._shutdown(fast=True)
                 event.accept()
-                self._exit_process(0)
+                self._quit_application()
             else:
                 event.ignore()
             return
@@ -3516,6 +3574,7 @@ class MainWindow(QMainWindow):
 def run_app() -> None:
     """Crea la aplicación Qt y muestra la ventana principal."""
     import os
+    import signal
     import sys
 
     from pyqorreos.core.user_preferences import load_preferences
@@ -3529,6 +3588,23 @@ def run_app() -> None:
     # Mantener la app viva en la bandeja al ocultar la ventana principal.
     app.setQuitOnLastWindowClosed(False)
     window = MainWindow()
+
+    def _on_terminal_signal(signum: int, _frame) -> None:
+        if window._quitting:
+            os._exit(128 + signum if signum > 0 else 1)
+        QTimer.singleShot(0, window._quit_application)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _on_terminal_signal)
+        except (ValueError, OSError):
+            pass
+
+    # Permite que Python reciba SIGINT/SIGTERM mientras Qt bloquea en app.exec().
+    signal_wakeup = QTimer()
+    signal_wakeup.timeout.connect(lambda: None)
+    signal_wakeup.start(400)
+
     window.show()
     exit_code = app.exec()
     # WebEngine / hilos en red pueden impedir la salida limpia del intérprete.

@@ -337,6 +337,8 @@ class MailService:
         if self._imap is not None:
             try:
                 self._imap.noop()
+                if folder:
+                    self._select_on_imap(self._imap, folder)
                 return
             except Exception:
                 try:
@@ -347,6 +349,15 @@ class MailService:
         self._open_imap_session()
         if folder:
             self._select_on_imap(self._require_imap(), folder)
+
+    def _ensure_selected_unlocked(
+        self, imap: imaplib.IMAP4_SSL | imaplib.IMAP4, folder: str
+    ) -> None:
+        """Abre la carpeta en IMAP (requerido para STORE, COPY, EXPUNGE, etc.)."""
+        if not folder:
+            raise RuntimeError("No se indicó carpeta IMAP")
+        self._select_on_imap(imap, folder)
+        self._current_folder = folder
 
     def disconnect(self) -> None:
         if self._imap:
@@ -443,6 +454,15 @@ class MailService:
             raise RuntimeError(f"No se pudo abrir la carpeta: {folder}")
         self._current_folder = folder
         return int(data[0]) if data and data[0] else 0
+
+    def poke_mailbox(self) -> None:
+        """Solicita al servidor el estado actualizado del buzón abierto."""
+        with self._imap_lock:
+            self._ensure_connected_unlocked()
+            imap = self._require_imap()
+            if self._current_folder:
+                self._select_on_imap(imap, self._current_folder)
+            imap.noop()
 
     @property
     def current_folder(self) -> str:
@@ -703,9 +723,8 @@ class MailService:
             imap = self._require_imap()
             previous = self._current_folder
             try:
-                if target and target != self._current_folder:
-                    self._select_on_imap(imap, target)
-                    self._current_folder = target
+                if target:
+                    self._ensure_selected_unlocked(imap, target)
                 imap.uid("store", uid, op, flags)
             finally:
                 if previous and previous != target:
@@ -848,28 +867,52 @@ class MailService:
         self, html: str, *, uid: str | None = None, folder: str | None = None
     ) -> str:
         """Descarga imágenes remotas; si hay uid, reprocesa el MIME original."""
-        from pyqorreos.core.email_html import embed_remote_images_in_html
+        from pyqorreos.core.email_html import (
+            BLOCKED_IMAGE_PLACEHOLDER_MARKER,
+            _base_url_from_sender,
+            load_remote_images_in_html,
+            prepare_html_for_display,
+        )
+
+        referer = ""
+        candidates: list[str] = []
 
         if uid:
-            _flags, raw = self._fetch_raw_message(
-                uid, folder or self._current_folder, mark_seen=False
-            )
-            msg = email.message_from_bytes(raw)
-            _text, raw_html = _extract_body(msg)
-            sender = _decode_header_value(msg.get("From")) or ""
-            if raw_html.strip():
-                return prepare_html_for_display(
-                    msg,
-                    raw_html,
-                    sender=sender,
-                    load_remote_images=True,
+            try:
+                _flags, raw = self._fetch_raw_message(
+                    uid,
+                    folder or self._current_folder or "INBOX",
+                    mark_seen=False,
                 )
-            from pyqorreos.core.email_html import _base_url_from_sender
+                msg = email.message_from_bytes(raw)
+                _text, raw_html = _extract_body(msg)
+                sender = _decode_header_value(msg.get("From")) or ""
+                referer = _base_url_from_sender(sender)
+                if raw_html.strip():
+                    candidates.append(
+                        prepare_html_for_display(
+                            msg,
+                            raw_html,
+                            sender=sender,
+                            load_remote_images=True,
+                        )
+                    )
+            except Exception:
+                pass
 
-            return embed_remote_images_in_html(
-                html, referer=_base_url_from_sender(sender)
-            )
-        return embed_remote_images_in_html(html)
+        if not referer and html:
+            referer = _base_url_from_sender("")
+
+        candidates.append(load_remote_images_in_html(html, referer=referer))
+
+        if not candidates:
+            return html
+
+        def _score(content: str) -> tuple[int, int]:
+            blocked = content.count(BLOCKED_IMAGE_PLACEHOLDER_MARKER)
+            return (-blocked, len(content))
+
+        return max(candidates, key=_score)
 
     def send_message(
         self,
@@ -969,15 +1012,13 @@ class MailService:
     def delete_messages(self, uids: list[str], folder: str | None = None) -> None:
         if not uids:
             return
-        target = folder or self._current_folder
+        target = folder or self._current_folder or "INBOX"
         with self._imap_lock:
             self._ensure_connected_unlocked()
             imap = self._require_imap()
             previous = self._current_folder
             try:
-                if target and target != self._current_folder:
-                    self._select_on_imap(imap, target)
-                    self._current_folder = target
+                self._ensure_selected_unlocked(imap, target)
                 for uid in uids:
                     imap.uid("store", uid, "+FLAGS", "(\\Deleted)")
                 imap.expunge()
@@ -989,10 +1030,14 @@ class MailService:
                     except imaplib.IMAP4.error:
                         pass
 
-    def copy_message(self, uid: str, dest_folder: str) -> None:
+    def copy_message(
+        self, uid: str, dest_folder: str, source_folder: str | None = None
+    ) -> None:
+        source = source_folder or self._current_folder or "INBOX"
         with self._imap_lock:
             self._ensure_connected_unlocked()
             imap = self._require_imap()
+            self._ensure_selected_unlocked(imap, source)
             status, _ = imap.uid(
                 "copy", uid, self._quoted_folder(dest_folder)
             )
@@ -1011,15 +1056,13 @@ class MailService:
     ) -> None:
         if not uids:
             return
-        source = source_folder or self._current_folder
+        source = source_folder or self._current_folder or "INBOX"
         with self._imap_lock:
             self._ensure_connected_unlocked()
             imap = self._require_imap()
             previous = self._current_folder
             try:
-                if source and source != self._current_folder:
-                    self._select_on_imap(imap, source)
-                    self._current_folder = source
+                self._ensure_selected_unlocked(imap, source)
                 for uid in uids:
                     status, _ = imap.uid(
                         "copy", uid, self._quoted_folder(dest_folder)

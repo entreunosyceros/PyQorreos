@@ -120,7 +120,7 @@ def launch_app() -> int:
     try:
         run_app()
     except KeyboardInterrupt:
-        print("\nAplicación cerrada por el usuario.")
+        print("\nAplicación cerrada por el usuario.", flush=True)
         os._exit(0)
     return 0
 

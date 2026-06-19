@@ -81,6 +81,10 @@ _BLOCKED_IMG_SRC = re.compile(
     r'\ssrc="[^"]*"\s*data-blocked-src="([^"]+)"',
     re.IGNORECASE,
 )
+_BLOCKED_CSS_URL = re.compile(
+    rf'url\(\s*["\']?{re.escape(_BLOCKED_IMG_PLACEHOLDER)}["\']?\s*\)\s*/\*\s*pyqorreos-blocked:([^*]+?)\s*\*/',
+    re.IGNORECASE,
+)
 _HAS_HTML_TAG = re.compile(r"<html[\s>]", re.IGNORECASE)
 _HAS_HEAD_CLOSE = re.compile(r"</head>", re.IGNORECASE)
 _HAS_BODY_TAG = re.compile(r"<body[\s>]", re.IGNORECASE)
@@ -437,6 +441,12 @@ def _embed_remote_img_tags(html: str, embedder: _RemoteImageEmbedder) -> str:
 
 
 def _embed_remote_css_urls(html: str, embedder: _RemoteImageEmbedder) -> str:
+    def replace_blocked_css(match: re.Match[str]) -> str:
+        url = _normalize_remote_url(unescape(match.group(1)))
+        return f'url("{embedder.embed(url)}")'
+
+    html = _BLOCKED_CSS_URL.sub(replace_blocked_css, html)
+
     def replacer(match: re.Match[str]) -> str:
         url = match.group(1)
         if _is_blocked_placeholder(url):
@@ -498,6 +508,11 @@ def load_remote_images_in_html(html: str, referer: str = "") -> str:
     from pyqorreos.ui.webengine_setup import sanitize_email_html_for_viewer
 
     return sanitize_email_html_for_viewer(html)
+
+
+def count_blocked_image_placeholders(html: str) -> int:
+    """Cuenta cuántas marcas de imagen bloqueada quedan en el HTML."""
+    return html.count(BLOCKED_IMAGE_PLACEHOLDER_MARKER)
 
 
 def _inject_base_styles(html: str) -> str:

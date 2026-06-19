@@ -90,6 +90,8 @@ class SyncFolderWorker(QThread):
         folder: str,
         cache: MailCache | None = None,
         batch_size: int = IMAP_BATCH_SIZE,
+        *,
+        fresh_mailbox: bool = False,
     ) -> None:
         super().__init__()
         self.service = service
@@ -97,6 +99,7 @@ class SyncFolderWorker(QThread):
         self.folder = folder
         self.cache = cache or MailCache()
         self.batch_size = batch_size
+        self.fresh_mailbox = fresh_mailbox
         self.signals = SyncSignals()
         self._cancelled = False
 
@@ -106,6 +109,8 @@ class SyncFolderWorker(QThread):
     def run(self) -> None:
         try:
             self.service.select_folder(self.folder)
+            if self.fresh_mailbox:
+                self.service.poke_mailbox()
             cached = self.cache.load_folder(self.account_id, self.folder)
             cached_map = {summary.uid: summary for summary in cached}
             initial_uids = set(cached_map.keys())
