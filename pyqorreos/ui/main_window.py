@@ -1326,6 +1326,18 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def open_on_primary_screen(self) -> None:
+        """Abre la ventana maximizada en el monitor principal."""
+        app = QApplication.instance()
+        screen = app.primaryScreen() if app is not None else None
+        if screen is not None:
+            self.setScreen(screen)
+            area = screen.availableGeometry()
+            self.setGeometry(area)
+        self.showMaximized()
+        self.raise_()
+        self.activateWindow()
+
     def _configure_chrome_context_menus(self) -> None:
         """Evita menús contextuales del sistema en la barra de menús y marcos."""
         prevent = Qt.ContextMenuPolicy.PreventContextMenu
@@ -3605,7 +3617,7 @@ def run_app() -> None:
     signal_wakeup.timeout.connect(lambda: None)
     signal_wakeup.start(400)
 
-    window.show()
+    window.open_on_primary_screen()
     exit_code = app.exec()
     # WebEngine / hilos en red pueden impedir la salida limpia del intérprete.
     os._exit(exit_code if isinstance(exit_code, int) else 0)
