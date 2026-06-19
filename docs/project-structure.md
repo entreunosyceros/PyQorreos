@@ -1,0 +1,58 @@
+# Estructura del proyecto
+
+[← Índice](README.md) · [README](../README.md)
+
+<div align="center">
+<img width="451" height="733" alt="about-PyQorreo" src="https://github.com/user-attachments/assets/f2a42a71-0a2f-4c87-9285-e4827177c901" />
+</div>
+
+```
+PyQorreos/
+├── run_app.py              # Lanzador recomendado (venv + deps)
+├── main.py                 # Entrada alternativa
+├── requirements.txt
+├── docs/                   # Documentación (esta carpeta)
+└── pyqorreos/
+    ├── core/
+    │   ├── account.py              # Cuentas y presets de proveedores
+    │   ├── mail_service.py         # Cliente IMAP/SMTP
+    │   ├── mail_cache.py           # Caché SQLite de cabeceras y cuerpos
+    │   ├── classifier.py           # Clasificación spam / importante
+    │   ├── email_html.py           # Preparación HTML para lectura
+    │   ├── translate.py            # Traducción de mensajes (deep-translator)
+    │   ├── list_unsubscribe.py     # Cabecera List-Unsubscribe
+    │   ├── link_safety.py          # Detección de enlaces sospechosos
+    │   ├── export_mail.py          # Exportación .eml / .mbox
+    │   ├── compose_email.py        # HTML, adjuntos y borradores
+    │   ├── compose_utils.py        # Utilidades al redactar (p. ej. adjuntos)
+    │   ├── reply_utils.py          # Borradores de respuesta / reenvío
+    │   ├── settings.py             # Configuración y keyring
+    │   ├── user_preferences.py     # Preferencias de la aplicación
+    │   ├── folder_utils.py         # Árbol de carpetas y utilidades IMAP
+    │   ├── message_attachments.py  # Extracción de adjuntos MIME
+    │   └── oauth.py                # Base OAuth2 (Gmail / Outlook)
+    ├── img/
+    │   ├── logos.png
+    │   └── folders/                # Iconos SVG de carpetas
+    └── ui/
+        ├── main_window.py          # Ventana principal
+        ├── message_viewer.py       # Visor HTML (WebEngine)
+        ├── attachment_panel.py     # Panel de adjuntos al leer
+        ├── compose_dialog.py       # Redactar / responder
+        ├── rich_compose_editor.py  # Barra de formato del editor
+        ├── account_dialog.py       # Alta/edición de una cuenta
+        ├── accounts_manager_dialog.py
+        ├── about_dialog.py
+        ├── preferences_dialog.py   # Preferencias (general + plantillas)
+        ├── background_sync.py      # IDLE y sync en segundo plano
+        ├── notification_utils.py   # Texto de notificaciones de correo nuevo
+        ├── folder_tree_widget.py   # Árbol de carpetas
+        ├── folder_icons.py         # Iconos por tipo de carpeta
+        ├── system_tray.py
+        ├── webengine_setup.py
+        └── workers.py              # Hilos de red
+```
+
+---
+
+**Ver también:** [Configuración y notas](configuration.md) · [Características](features.md)
