@@ -30,6 +30,7 @@ credentials.json
 accounts.json
 classification.json
 preferences.json
+oauth_clients.json
 mail_cache.db
 *.db
 *.db-journal
@@ -37,6 +38,10 @@ mail_cache.db
 *.db-shm
 *.sqlite
 *.sqlite3
+
+# Exportaciones de correo (no subir mensajes reales al repositorio)
+*.eml
+*.mbox
 
 # --- Herramientas de test y cobertura ---
 tests/
