@@ -10,16 +10,27 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 
 ## Cuentas y conexión
 
-- Varias cuentas de correo (Gmail, Outlook, Yahoo, **hosting / cPanel** o servidor personalizado)
+- Varias cuentas de correo (Gmail, Outlook, Hotmail, MSN, Live, AOL, Yahoo, **hosting / cPanel** o servidor personalizado)
+- **Presets de proveedor** con servidores IMAP/SMTP preconfigurados; al escribir el correo en una cuenta nueva, se **detecta el preset** según el dominio (`@hotmail.*`, `@msn.com`, `@aol.*`, etc.)
 - Selector rápido de cuenta activa y gestor de cuentas (**añadir, editar, eliminar**)
 - Conexión IMAP/SMTP con **SSL/TLS** o **STARTTLS** configurable por cuenta (puertos 993/143, 465/587)
 - Preset **Hosting / cPanel (Webempresa, etc.)** para correo en dominio propio (`mail.tudominio.com`)
 - Contraseñas en el llavero del sistema (`keyring`); opción **mostrar contraseña** al configurar la cuenta
-- **Aviso para Gmail** al configurar la cuenta: enlace a contraseña de aplicación (no la contraseña de la cuenta Google)
+- Avisos contextuales al configurar **Gmail**, **AOL** y **Microsoft** (contraseña de aplicación u OAuth)
 - Firma de correo configurable por cuenta
-- OAuth2 integrado para **Gmail** y **Outlook** (inicio de sesión en navegador + renovación automática de tokens)
-- Alternativa: contraseña de aplicación (Gmail) o contraseña habitual según el proveedor
+- OAuth2 integrado para **Gmail** y **Microsoft** (Outlook, Hotmail, MSN, Live) — inicio de sesión en navegador + renovación automática de tokens
+- Alternativa: contraseña de aplicación según el proveedor
 - Bandeja del sistema: la app sigue activa al cerrar la ventana; **Archivo → Salir** cierra por completo
+
+### Presets incluidos
+
+| Proveedor | Dominios típicos | IMAP | SMTP |
+|-----------|------------------|------|------|
+| Gmail | `@gmail.com`, `@googlemail.com` | `imap.gmail.com:993` | `smtp.gmail.com:587` |
+| Outlook / Hotmail / MSN | `@outlook.*`, `@hotmail.*`, `@live.*`, `@msn.com` | `outlook.office365.com:993` | `smtp.office365.com:587` |
+| Yahoo | `@yahoo.*`, `@ymail.com` | `imap.mail.yahoo.com:993` | `smtp.mail.yahoo.com:587` |
+| AOL | `@aol.*` | `imap.aol.com:993` | `smtp.aol.com:587` |
+| Hosting / cPanel | dominio propio | `mail.tudominio.com:993` | `mail.tudominio.com:465/587` |
 
 ## Bandeja y sincronización
 
@@ -57,7 +68,8 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 ## Acciones sobre el correo
 
 - Responder, responder a todos, reenviar y eliminar
-- Selección múltiple: marcar, eliminar o mover varios mensajes a la vez
+- **Eliminación en lote** optimizada (IMAP y caché SQLite por lotes) con aviso en barra de estado y barra de progreso al borrar varios mensajes
+- Selección múltiple: marcar, eliminar o mover varios correos a la vez
 - Mover mensajes entre carpetas (menú contextual o botón «Mover a…»)
 - Vaciar papelera desde el menú contextual de la carpeta
 - Exportar mensaje a `.eml` o carpeta completa a `.mbox`
@@ -84,9 +96,11 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 ## Rendimiento y estabilidad
 
 - Operaciones de red en hilos secundarios (la interfaz no se bloquea)
-- Caché SQLite en modo WAL; búsqueda en base de datos con debounce
+- Caché SQLite en modo **WAL** con `busy_timeout` para lecturas concurrentes durante la sincronización
+- Búsqueda en base de datos con debounce
 - Conexión IMAP dedicada por mensaje y reintentos ante errores de protocolo
 - Reconexión IMAP segura al usar varias cuentas o hilos de lectura en paralelo
+- Limpieza de adjuntos temporales al cerrar la aplicación
 - Cabeceras limitadas en carpetas muy grandes (>5000 mensajes) en la primera sync
 - Timeouts IMAP/SMTP y mensajes de error claros — ver [Pilares de calidad](quality-pillars.md)
 

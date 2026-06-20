@@ -10,19 +10,23 @@
 | `~/.config/pyqorreos/classification.json` | Reglas de clasificación |
 | `~/.config/pyqorreos/preferences.json` | Preferencias (sync, imágenes, hilos, idioma de traducción, **tema**, plantillas…) |
 | `~/.config/pyqorreos/mail_cache.db` | Caché local de correos |
-| `~/.config/pyqorreos/oauth_clients.json` | Client ID y secret OAuth (Gmail / Outlook) |
+| `~/.config/pyqorreos/oauth_clients.json` | Client ID y secret OAuth (Gmail / Microsoft) |
 | Llavero del sistema | Contraseñas y tokens OAuth (vía `keyring`) |
+
+Los archivos sensibles (`oauth_clients.json`, `accounts.json`, `mail_cache.db`, exportaciones `.eml`/`.mbox`) están en `.gitignore` si se copian al directorio del proyecto; la configuración real vive en `~/.config/pyqorreos/`.
 
 ## Notas importantes
 
 ### Gmail y cuentas
 
 - Para **Gmail** puedes usar **OAuth2** (recomendado) o una [contraseña de aplicación](https://support.google.com/accounts/answer/185833).
-- Para **Outlook / Hotmail** también puedes usar **OAuth2** o contraseña de aplicación si tu cuenta lo permite.
-- Para **hosting / cPanel** (Webempresa, Raiola, etc.): elige el preset **Hosting / cPanel** al añadir la cuenta. Suele ser `mail.tudominio.com`, usuario = correo completo, IMAP **993 SSL/TLS**, SMTP **465 SSL** o **587 STARTTLS**. Usa **Probar conexión** antes de guardar.
+- Para **Outlook / Hotmail / MSN / Live** (`@outlook.*`, `@hotmail.*`, `@live.*`, `@msn.com`): elige el preset **Outlook / Hotmail / MSN** o escribe el correo y se autoconfigura. **OAuth2** (Microsoft) es lo recomendado; con contraseña, puede hacer falta una contraseña de aplicación si tienes verificación en dos pasos.
+- Para **AOL** (`@aol.*`): preset **AOL** (`imap.aol.com` / `smtp.aol.com`); suele requerir [contraseña de aplicación](https://login.aol.com/account/security).
+- Para **Yahoo**: preset Yahoo; contraseña de aplicación habitual en cuentas con 2FA.
+- Para **hosting / cPanel** (Webempresa, Raiola, etc.): preset **Hosting / cPanel**. Suele ser `mail.tudominio.com`, usuario = correo completo, IMAP **993 SSL/TLS**, SMTP **465 SSL** o **587 STARTTLS**. Usa **Probar conexión** antes de guardar.
 - En Linux, el llavero usa Secret Service (GNOME Keyring, KWallet, etc.).
 
-### OAuth2 (Gmail y Outlook)
+### OAuth2 (Gmail y Microsoft)
 
 <div align="center">
 
@@ -35,7 +39,7 @@
    - **Google:** [Google Cloud Console](https://console.cloud.google.com/) → APIs → Gmail API activada → Credenciales → ID de cliente OAuth → Aplicación de escritorio. URI de redirección: `http://127.0.0.1`.
    - **Microsoft:** [Entra / Azure Portal](https://portal.azure.com/) → Registros de aplicaciones → Nueva → Aplicaciones móviles y de escritorio → URI `http://127.0.0.1`. Permisos delegados: `IMAP.AccessAsUser.All`, `SMTP.Send`, `offline_access`.
 3. Pulsa **Aceptar** en Preferencias para guardar en `~/.config/pyqorreos/oauth_clients.json`.
-4. En **Cuenta → Añadir / Editar** → Autenticación **OAuth2** → **Identificarse con Google/Microsoft**.
+4. En **Cuenta → Añadir / Editar** → Autenticación **OAuth2** → **Identificarse con Google/Microsoft** (válido para Outlook, Hotmail y MSN).
 
 El `refresh_token` se guarda en el llavero de forma permanente; el `access_token` se usa para conectar y se renueva automáticamente al caducar.
 

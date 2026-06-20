@@ -161,6 +161,7 @@ class MainWindow(QMainWindow):
         self._quitting = False
         self._tray: SystemTray | None = None
         self._tray_menu: QMenu | None = None
+        self._temp_attachment_paths: set[str] = set()
         self._all_messages: list[MailSummary] = []
         self._current_folder = "INBOX"
         self._current_page = 0
@@ -1489,6 +1490,15 @@ class MainWindow(QMainWindow):
             self.message_viewer.shutdown_engine()
         if self._tray:
             self._tray.hide()
+
+        # Limpieza de adjuntos temporales creados para xdg-open.
+        # Se realiza al salir para no interferir con el uso normal mientras la app está abierta.
+        for tmp_path in list(self._temp_attachment_paths):
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._temp_attachment_paths.clear()
 
     def _exit_process(self, code: int = 0) -> None:
         """Termina el proceso de inmediato (devuelve el control a la terminal)."""
@@ -3166,6 +3176,7 @@ class MainWindow(QMainWindow):
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(data)
             tmp_path = tmp.name
+        self._temp_attachment_paths.add(tmp_path)
         try:
             subprocess.Popen(["xdg-open", tmp_path])
         except OSError:
@@ -3682,7 +3693,21 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        if len(uids) == 1:
+        count = len(uids)
+        if count == 1:
+            self.status_bar.showMessage("Eliminando mensaje…")
+        else:
+            self.status_bar.showMessage(f"Eliminando {count} mensajes…")
+            self.sync_progress.setVisible(True)
+            self.sync_progress.setMaximum(0)
+            self.sync_progress.setValue(0)
+            self.sync_progress.setFormat("Eliminando mensajes…")
+
+        for btn in self._list_action_buttons:
+            btn.setEnabled(False)
+        self._act_delete.setEnabled(False)
+
+        if count == 1:
             worker = DeleteMessageWorker(
                 self.mail_service,
                 uids[0],
@@ -3704,7 +3729,12 @@ class MainWindow(QMainWindow):
         worker.start()
         self._track_worker(worker)
 
+    def _finish_delete_ui(self) -> None:
+        self.sync_progress.setVisible(False)
+        self._update_message_actions()
+
     def _on_delete_error(self, message: str) -> None:
+        self._finish_delete_ui()
         self.status_bar.showMessage("Error al eliminar mensajes")
         QMessageBox.warning(self, "Eliminar mensajes", message)
 
@@ -3712,6 +3742,7 @@ class MainWindow(QMainWindow):
         self._on_messages_deleted([uid])
 
     def _on_messages_deleted(self, uids: list[str]) -> None:
+        self._finish_delete_ui()
         removed = set(uids)
         self._all_messages = [m for m in self._all_messages if m.uid not in removed]
         if self._current_message and self._current_message.uid in removed:

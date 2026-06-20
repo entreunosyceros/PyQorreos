@@ -14,7 +14,7 @@ PyQorreos/
 ├── docs/                   # Documentación (esta carpeta)
 └── pyqorreos/
     ├── core/
-    │   ├── account.py              # Cuentas y presets de proveedores
+    │   ├── account.py              # Cuentas, presets (Gmail, Microsoft, AOL, Yahoo…)
     │   ├── mail_service.py         # Cliente IMAP/SMTP
     │   ├── mail_cache.py           # Caché SQLite de cabeceras y cuerpos
     │   ├── classifier.py           # Clasificación spam / importante
@@ -32,7 +32,7 @@ PyQorreos/
     │   ├── user_preferences.py     # Preferencias de la aplicación
     │   ├── folder_utils.py         # Árbol de carpetas y utilidades IMAP
     │   ├── message_attachments.py  # Extracción de adjuntos MIME
-    │   ├── oauth.py                # OAuth2 (Gmail / Outlook)
+    │   ├── oauth.py                # OAuth2 (Gmail / Microsoft: Outlook, Hotmail, MSN)
     │   └── oauth_clients.py        # Client ID/secret OAuth en disco
     ├── img/
     │   ├── logos.png

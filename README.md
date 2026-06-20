@@ -26,11 +26,11 @@ Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**.
 
 ## En resumen
 
-- **Varias cuentas** IMAP/SMTP (Gmail, Outlook, Yahoo, hosting / dominio propio)
+- **Varias cuentas** IMAP/SMTP (Gmail, Outlook, Hotmail, MSN, AOL, Yahoo, hosting / dominio propio)
 - **Bandeja de tres paneles** con sync incremental, caché local y clasificación spam/importante
 - **Al arrancar**: caché al instante + descarga de correo nuevo del servidor
 - **Visor HTML** (WebEngine), imágenes remotas bajo demanda, traducción y anti-phishing
-- **OAuth2** (Gmail/Outlook), preset hosting y tema claro/oscuro
+- **OAuth2** (Gmail / Microsoft), presets por proveedor y tema claro/oscuro
 
 [Listista completa de características →](docs/features.md)
 
@@ -55,7 +55,7 @@ Para que todo quede claro, en la siguiente tabla se puede consultar toda la docu
 | [Uso rápido](docs/usage.md) | Primeros pasos en la interfaz |
 | [Atajos de teclado](docs/keyboard-shortcuts.md) | Referencia de atajos |
 | [Estructura del proyecto](docs/project-structure.md) | Módulos y carpetas del código |
-| [Configuración y notas](docs/configuration.md) | Archivos de datos, Gmail, privacidad… |
+| [Configuración y notas](docs/configuration.md) | Archivos de datos, Gmail, Hotmail, MSN, AOL, privacidad… |
 | [Pilares de calidad](docs/quality-pillars.md) | Rendimiento, robustez y aspecto visual |
 | [Historial de cambios](docs/changelog.md) | Mejoras recientes |
 

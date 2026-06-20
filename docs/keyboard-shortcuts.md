@@ -15,7 +15,7 @@
 | `Ctrl+,` | Preferencias |
 | `Ctrl+Q` | Salir |
 
-En la lista de mensajes puedes usar **selección múltiple** (`Ctrl+clic`, `Shift+clic`) para eliminar o mover varios correos.
+En la lista de mensajes puedes usar **selección múltiple** (`Ctrl+clic`, `Shift+clic`) para eliminar o mover varios correos. Al borrar varios a la vez (`Delete`), la barra de estado y una barra de progreso indican que la operación sigue en curso.
 
 ---
 

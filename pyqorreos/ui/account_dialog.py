@@ -30,12 +30,16 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.core.account import (
+    AOL_APP_PASSWORD_URL,
     GMAIL_APP_PASSWORD_HELP_URL,
     GMAIL_APP_PASSWORD_URL,
     PROVIDER_PRESETS,
     MailAccount,
+    detect_provider_from_email,
     detect_provider_preset,
+    is_aol_email,
     is_gmail_account,
+    is_microsoft_email,
 )
 from pyqorreos.core.mail_service import MailService
 from pyqorreos.core.oauth import (
@@ -94,13 +98,13 @@ class AccountDialog(QDialog):
         provider_row.addWidget(self.provider_combo)
         layout.addLayout(provider_row)
 
-        self.gmail_notice = QLabel()
-        self.gmail_notice.setWordWrap(True)
-        self.gmail_notice.setTextFormat(Qt.TextFormat.RichText)
-        self.gmail_notice.setOpenExternalLinks(True)
-        mark_role(self.gmail_notice, "link-warning")
-        self.gmail_notice.setVisible(False)
-        layout.addWidget(self.gmail_notice)
+        self.provider_notice = QLabel()
+        self.provider_notice.setWordWrap(True)
+        self.provider_notice.setTextFormat(Qt.TextFormat.RichText)
+        self.provider_notice.setOpenExternalLinks(True)
+        mark_role(self.provider_notice, "link-warning")
+        self.provider_notice.setVisible(False)
+        layout.addWidget(self.provider_notice)
 
         self.oauth_notice = QLabel()
         self.oauth_notice.setWordWrap(True)
@@ -181,7 +185,7 @@ class AccountDialog(QDialog):
 
         self.auth_combo = QComboBox()
         self.auth_combo.addItems(
-            ["Contraseña / app password", "OAuth2 (Gmail / Outlook)"]
+            ["Contraseña / app password", "OAuth2 (Gmail / Outlook / Hotmail / MSN)"]
         )
         self.auth_combo.currentIndexChanged.connect(self._on_auth_method_changed)
         form.addRow("Autenticación:", self.auth_combo)
@@ -229,8 +233,18 @@ class AccountDialog(QDialog):
         return self.auth_combo.currentIndex() == 1
 
     def _on_identity_changed(self) -> None:
-        self._update_gmail_notice()
+        self._maybe_auto_select_provider()
+        self._update_provider_notice()
         self._update_oauth_availability()
+
+    def _maybe_auto_select_provider(self) -> None:
+        """En cuentas nuevas, elige preset según el dominio (@hotmail, @msn, @aol…)."""
+        if self.account:
+            return
+        preset = detect_provider_from_email(self.email_edit.text().strip())
+        if not preset or self.provider_combo.currentText() == preset:
+            return
+        self.provider_combo.setCurrentText(preset)
 
     def _on_auth_method_changed(self, _index: int) -> None:
         oauth_mode = self._is_oauth_mode()
@@ -238,7 +252,7 @@ class AccountDialog(QDialog):
         self._password_row_widget.setVisible(not oauth_mode)
         for widget in self._oauth_row_widgets:
             widget.setVisible(oauth_mode)
-        self._update_gmail_notice()
+        self._update_provider_notice()
         self._update_oauth_availability()
         self._refresh_oauth_status()
 
@@ -295,18 +309,18 @@ class AccountDialog(QDialog):
         else:
             self.oauth_status.setText("Pendiente de autorización")
 
-    def _update_gmail_notice(self) -> None:
+    def _update_provider_notice(self) -> None:
         if self._is_oauth_mode():
-            self.gmail_notice.setVisible(False)
+            self.provider_notice.setVisible(False)
             return
-        gmail = is_gmail_account(
-            provider=self.provider_combo.currentText(),
-            email=self.email_edit.text(),
-            imap_host=self.imap_host_edit.text(),
-        )
-        self.gmail_notice.setVisible(gmail)
-        if gmail:
-            self.gmail_notice.setText(
+
+        email = self.email_edit.text()
+        imap_host = self.imap_host_edit.text()
+        provider = self.provider_combo.currentText()
+
+        if is_gmail_account(provider=provider, email=email, imap_host=imap_host):
+            self.provider_notice.setVisible(True)
+            self.provider_notice.setText(
                 "<b>Cuenta Gmail</b><br>"
                 "Google <b>no permite</b> usar la contraseña habitual de tu cuenta. "
                 "Necesitas una <b>contraseña de aplicación</b> de 16 caracteres, "
@@ -323,12 +337,45 @@ class AccountDialog(QDialog):
                 self.password_edit.setPlaceholderText(
                     "Dejar vacío para mantener la actual (contraseña de aplicación)"
                 )
-        else:
+            return
+
+        if is_aol_email(email) or provider == "AOL":
+            self.provider_notice.setVisible(True)
+            self.provider_notice.setText(
+                "<b>Cuenta AOL</b><br>"
+                "AOL suele exigir una <b>contraseña de aplicación</b> para clientes "
+                "de correo de terceros (no la contraseña de la web).<br>"
+                f'Créala en <a href="{AOL_APP_PASSWORD_URL}">Seguridad de la cuenta AOL</a>.'
+            )
+            self.password_label.setText("Contraseña de aplicación:")
+            if not self.account:
+                self.password_edit.setPlaceholderText("Contraseña de aplicación AOL")
+            return
+
+        if is_microsoft_email(email) or provider == "Outlook / Hotmail / MSN":
+            self.provider_notice.setVisible(True)
+            self.provider_notice.setText(
+                "<b>Outlook / Hotmail / MSN</b><br>"
+                "Usa tu correo completo como usuario. Recomendado: <b>OAuth2</b> "
+                "(Microsoft) en Autenticación. Con contraseña, puede hacer falta una "
+                "<b>contraseña de aplicación</b> si tienes verificación en dos pasos."
+            )
             self.password_label.setText("Contraseña:")
             if self.account:
                 self.password_edit.setPlaceholderText("Dejar vacío para mantener la actual")
             else:
                 self.password_edit.setPlaceholderText("")
+            return
+
+        self.provider_notice.setVisible(False)
+        self.password_label.setText("Contraseña:")
+        if self.account:
+            self.password_edit.setPlaceholderText("Dejar vacío para mantener la actual")
+        else:
+            self.password_edit.setPlaceholderText("")
+
+    def _update_gmail_notice(self) -> None:
+        self._update_provider_notice()
 
     def _on_smtp_port_changed(self, _port: int) -> None:
         self._suggest_tls_from_ports()
@@ -459,7 +506,7 @@ class AccountDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "OAuth2",
-                "OAuth2 solo está disponible para cuentas Gmail u Outlook.",
+                "OAuth2 solo está disponible para cuentas Gmail, Outlook, Hotmail o MSN.",
             )
             return
         if not oauth_clients_configured(provider_key):

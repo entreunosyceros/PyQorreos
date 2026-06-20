@@ -6,7 +6,15 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ---
 
-## Hosting, lectura y traducción (reciente)
+## Proveedores, rendimiento y pulido (reciente)
+
+- Presets y autodetección para **AOL**, **Hotmail**, **MSN** y **Live** (Microsoft OAuth compartido con Outlook).
+- **Eliminación en lote** más rápida (IMAP `UID STORE` por lotes + caché SQLite en una transacción) con feedback visual.
+- Caché SQLite: **`busy_timeout`** para evitar errores `database is locked` durante sync y lectura simultánea.
+- Limpieza de **adjuntos temporales** al cerrar la aplicación.
+- `.gitignore` ampliado: `oauth_clients.json`, `*.eml`, `*.mbox`.
+
+## Hosting, lectura y traducción
 
 - Preset **Hosting / cPanel (Webempresa, etc.)** con IMAP/SMTP **SSL/TLS** y **STARTTLS** configurables.
 - Corrección de charsets MIME **`unknown-8bit`** y similares al descargar mensajes (`email_charset.py`).
@@ -73,6 +81,8 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 | `pyqorreos/ui/theme.py` | Tema claro/oscuro y estilos globales |
 | `pyqorreos/core/network_errors.py` | Mensajes de error legibles |
 | `pyqorreos/core/email_charset.py` | Normalización de charsets MIME (`unknown-8bit`, etc.) |
+| `pyqorreos/core/mail_cache.py` | Caché SQLite (WAL, `busy_timeout`, `remove_uids` en lote) |
+| `pyqorreos/core/account.py` | Presets AOL, Microsoft (Hotmail/MSN), autodetección por dominio |
 | `pyqorreos/core/translate.py` | Traducción y HTML de lectura |
 | `pyqorreos/core/link_safety.py` | Anti-phishing y URLs sueltas |
 | `docs/` | Documentación segmentada |

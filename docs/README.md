@@ -18,9 +18,9 @@ Guías y referencia del proyecto. Empieza por [Instalación](installation.md) o 
 | [Uso rápido](usage.md) | Primeros pasos en la interfaz |
 | [Atajos de teclado](keyboard-shortcuts.md) | Tabla de atajos |
 | [Estructura del proyecto](project-structure.md) | Árbol de carpetas y módulos |
-| [Configuración y notas](configuration.md) | Archivos de datos, Gmail, traducción, privacidad… |
+| [Configuración y notas](configuration.md) | Archivos de datos, Gmail, Hotmail, MSN, AOL, privacidad… |
 | [Pilares de calidad](quality-pillars.md) | Rendimiento, robustez y calidad visual |
-| [Historial de cambios](changelog.md) | Mejoras recientes (hosting, traducción, imágenes remotas…) |
+| [Historial de cambios](changelog.md) | Mejoras recientes (AOL, Hotmail, MSN, rendimiento…) |
 
 ---
 

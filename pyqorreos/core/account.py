@@ -2,7 +2,7 @@
 Modelos de datos para cuentas de correo.
 
 Define la estructura MailAccount y los presets de servidores IMAP/SMTP
-para los proveedores más habituales (Gmail, Outlook, Yahoo).
+para los proveedores más habituales (Gmail, Outlook, Yahoo, AOL, etc.).
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 import uuid
+
+from email.utils import parseaddr
 
 
 @dataclass
@@ -61,7 +63,7 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "use_ssl": True,
         "use_starttls": True,
     },
-    "Outlook / Hotmail": {
+    "Outlook / Hotmail / MSN": {
         "imap_host": "outlook.office365.com",
         "imap_port": 993,
         "smtp_host": "smtp.office365.com",
@@ -77,6 +79,14 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "use_ssl": True,
         "use_starttls": True,
     },
+    "AOL": {
+        "imap_host": "imap.aol.com",
+        "imap_port": 993,
+        "smtp_host": "smtp.aol.com",
+        "smtp_port": 587,
+        "use_ssl": True,
+        "use_starttls": True,
+    },
     "Hosting / cPanel (Webempresa, etc.)": {
         "imap_host": "mail.tudominio.com",
         "imap_port": 993,
@@ -87,16 +97,76 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
     },
     "Personalizado": {},
 }
+
+# Servidores IMAP equivalentes al preset de Microsoft (Outlook, Hotmail, MSN, Live).
+_MICROSOFT_IMAP_HOSTS = frozenset(
+    {
+        "outlook.office365.com",
+        "imap-mail.outlook.com",
+        "imap.outlook.com",
+    }
+)
+
+# Servidores IMAP equivalentes al preset de AOL.
+_AOL_IMAP_HOSTS = frozenset({"imap.aol.com"})
+
 # URLs de ayuda para la autenticación de Gmail
 GMAIL_APP_PASSWORD_URL = "https://myaccount.google.com/apppasswords"
 GMAIL_APP_PASSWORD_HELP_URL = "https://support.google.com/accounts/answer/185833"
+AOL_APP_PASSWORD_URL = "https://login.aol.com/account/security"
+
+
+def _email_domain(email: str) -> str:
+    _name, addr = parseaddr(email.strip())
+    if "@" not in addr:
+        return ""
+    return addr.rsplit("@", 1)[-1].lower()
+
+
+def is_microsoft_email(email: str) -> bool:
+    """True para @hotmail.*, @outlook.*, @live.* y @msn.com."""
+    domain = _email_domain(email)
+    if not domain:
+        return False
+    if domain == "msn.com":
+        return True
+    return domain.startswith(("hotmail.", "outlook.", "live."))
+
+
+def is_aol_email(email: str) -> bool:
+    domain = _email_domain(email)
+    return bool(domain) and domain.startswith("aol.")
+
+
+def detect_provider_from_email(email: str) -> str | None:
+    """Sugiere un preset según el dominio del correo (@hotmail, @msn, @aol, etc.)."""
+    domain = _email_domain(email)
+    if not domain:
+        return None
+    if domain in ("gmail.com", "googlemail.com"):
+        return "Gmail"
+    if is_microsoft_email(email):
+        return "Outlook / Hotmail / MSN"
+    if domain.startswith("yahoo.") or domain == "ymail.com" or domain == "rocketmail.com":
+        return "Yahoo"
+    if is_aol_email(email):
+        return "AOL"
+    return None
 
 
 def detect_provider_preset(account: MailAccount) -> str:
-    """Devuelve el preset de proveedor que coincide con los servidores de la cuenta."""
+    """Devuelve el preset de proveedor que coincide con email o servidores IMAP."""
+    from_email = detect_provider_from_email(account.email)
+    if from_email:
+        return from_email
+
     imap = account.imap_host.strip().lower()
     if not imap:
         return "Personalizado"
+    if imap in _MICROSOFT_IMAP_HOSTS:
+        return "Outlook / Hotmail / MSN"
+    if imap in _AOL_IMAP_HOSTS:
+        return "AOL"
     if imap.startswith("mail.") or imap.startswith("imap."):
         return "Hosting / cPanel (Webempresa, etc.)"
     for name, preset in PROVIDER_PRESETS.items():

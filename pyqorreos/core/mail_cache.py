@@ -67,10 +67,14 @@ class MailCache:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        # WAL permite lectura concurrente mientras se escribe, pero en ráfagas de escrituras
+        # desde varios hilos SQLite puede necesitar esperar al lock. Un timeout alto evita
+        # fallos esporádicos de "database is locked" sin penalizar el caso normal.
+        conn = sqlite3.connect(self.db_path, timeout=20.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=20000")
         conn.execute("PRAGMA temp_store=MEMORY")
         conn.execute("PRAGMA cache_size=-64000")
         return conn

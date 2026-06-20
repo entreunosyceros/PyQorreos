@@ -10,7 +10,9 @@ Objetivo: que una carpeta con decenas de miles de correos siga siendo usable al 
 
 | Área | Estado |
 |------|--------|
-| Caché SQLite con WAL y lectura en segundo plano al abrir carpeta | Implementado |
+| Caché SQLite con WAL, `busy_timeout` y lectura en segundo plano al abrir carpeta | Implementado |
+| Eliminación/movimiento IMAP en lote (varios UID por comando) | Implementado |
+| Eliminación en caché SQLite en una transacción (`remove_uids`) | Implementado |
 | Búsqueda en SQLite (asunto/remitente) con debounce | Implementado |
 | Sin recargar toda la carpeta en cada lote de sincronización | Implementado |
 | Paginación solo en UI (no descarga todo el cuerpo) | Ya existía |
@@ -29,6 +31,7 @@ Objetivo: fallos de red o servidor que no bloqueen la interfaz y den mensajes cl
 | Mensajes de error legibles (contraseña, red, timeout…) | Implementado |
 | Reconexión IMAP (`ensure_connected`) | Ya existía |
 | Límite y aviso de adjuntos grandes al enviar | Implementado |
+| Limpieza de adjuntos temporales al salir | Implementado |
 | Reintentos automáticos en sync/envío | Pendiente |
 | Tests automatizados de escenarios de fallo | Pendiente |
 

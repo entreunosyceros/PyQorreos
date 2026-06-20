@@ -22,7 +22,7 @@ from typing import Callable
 
 import keyring
 
-from pyqorreos.core.account import MailAccount
+from pyqorreos.core.account import MailAccount, is_microsoft_email
 from pyqorreos.core.oauth_clients import (
     OAuthClientCredentials,
     load_oauth_client,
@@ -209,9 +209,8 @@ def detect_oauth_provider(email: str, imap_host: str) -> str | None:
         "office365" in host
         or "outlook" in host
         or "hotmail" in host
-        or addr.endswith("@outlook.com")
-        or addr.endswith("@hotmail.com")
-        or addr.endswith("@live.com")
+        or "live.com" in host
+        or is_microsoft_email(email)
     ):
         return "outlook"
     return None
@@ -349,7 +348,7 @@ def ensure_valid_access_token(account: MailAccount) -> str:
     """Devuelve un access_token válido, renovándolo si hace falta."""
     provider_key = detect_oauth_provider(account.email, account.imap_host)
     if not provider_key:
-        raise OAuthError("Esta cuenta no admite OAuth2 (solo Gmail u Outlook).")
+        raise OAuthError("Esta cuenta no admite OAuth2 (solo Gmail, Outlook, Hotmail o MSN).")
     token = get_oauth_token(account.id)
     if not token:
         raise OAuthError(oauth_not_configured_message(provider_key))

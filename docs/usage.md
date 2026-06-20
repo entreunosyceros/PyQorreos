@@ -22,19 +22,20 @@ La ventana permanece usable mientras conecta; no hace falta pulsar «Actualizar�
 </div>
 
 1. **Cuenta → Gestionar cuentas** (o **Gestionar…** en la barra superior) para añadir una o más cuentas.
-2. Usa **Probar conexión** en el diálogo de cuenta antes de guardar.
-3. Opcional: define una **firma** en el diálogo de cuenta.
-4. Cambia de cuenta con el desplegable **Cuenta:**.
-5. Navega por el **árbol de carpetas**; **doble clic** en un mensaje (o `Enter`) para abrirlo.
-6. Usa la **barra de búsqueda** y los filtros sobre la lista de mensajes.
-7. En el visor: **Mostrar imágenes remotas** (si están bloqueadas), **Traducir**, **Modo lectura** o **Texto plano** según necesites.
-8. **Redactar** (`Ctrl+N`) o **Responder** (`Ctrl+R`) con el editor enriquecido y plantillas.
-9. Clic derecho en el listado, en una carpeta o en la bandeja del sistema para más acciones.
-10. Ajusta el comportamiento en **Archivo → Preferencias…** (`Ctrl+,`): sync, imágenes, idioma de traducción, plantillas…
+2. Escribe tu **correo**; si el dominio es conocido (`@gmail.com`, `@hotmail.com`, `@msn.com`, `@aol.com`, etc.), el **preset de proveedor** se elige solo.
+3. Usa **Probar conexión** en el diálogo de cuenta antes de guardar.
+4. Opcional: define una **firma** en el diálogo de cuenta.
+5. Cambia de cuenta con el desplegable **Cuenta:**.
+6. Navega por el **árbol de carpetas**; **doble clic** en un mensaje (o `Enter`) para abrirlo.
+7. Usa la **barra de búsqueda** y los filtros sobre la lista de mensajes.
+8. En el visor: **Mostrar imágenes remotas** (si están bloqueadas), **Traducir**, **Modo lectura** o **Texto plano** según necesites.
+9. **Redactar** (`Ctrl+N`) o **Responder** (`Ctrl+R`) con el editor enriquecido y plantillas.
+10. Clic derecho en el listado, en una carpeta o en la bandeja del sistema para más acciones.
+11. Ajusta el comportamiento en **Archivo → Preferencias…** (`Ctrl+,`): sync, imágenes, idioma de traducción, plantillas…
 
 ## Selección múltiple
 
-En la lista de mensajes puedes usar **selección múltiple** (`Ctrl+clic`, `Shift+clic`) para eliminar o mover varios correos a la vez.
+En la lista de mensajes puedes usar **selección múltiple** (`Ctrl+clic`, `Shift+clic`) para eliminar o mover varios correos a la vez. Al eliminar varios mensajes verás un aviso en la barra de estado y una barra de progreso mientras se procesa la operación en el servidor.
 
 ---
 

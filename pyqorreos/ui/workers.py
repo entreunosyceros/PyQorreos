@@ -454,8 +454,9 @@ class DeleteMessagesWorker(QThread):
         try:
             self.service.delete_messages(self.uids, self.folder or None)
             if self.cache and self.account_id and self.folder:
-                for uid in self.uids:
-                    self.cache.delete_message(self.account_id, self.folder, uid)
+                self.cache.remove_uids(
+                    self.account_id, self.folder, set(self.uids)
+                )
             self.signals.finished.emit(self.uids)
         except Exception as exc:
             self.signals.error.emit(friendly_mail_error(exc))

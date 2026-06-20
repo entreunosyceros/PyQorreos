@@ -1043,8 +1043,10 @@ class MailService:
             previous = self._current_folder
             try:
                 self._ensure_selected_unlocked(imap, target)
-                for uid in uids:
-                    imap.uid("store", uid, "+FLAGS", "(\\Deleted)")
+                batch_size = 100
+                for start in range(0, len(uids), batch_size):
+                    chunk = uids[start : start + batch_size]
+                    imap.uid("store", ",".join(chunk), "+FLAGS", "(\\Deleted)")
                 imap.expunge()
             finally:
                 if previous and previous != target:

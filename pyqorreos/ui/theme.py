@@ -500,7 +500,8 @@ def about_features_html(theme: str | None = None) -> str:
     return f"""
 <ul style="margin: 0; padding-left: 1.2em; line-height: 1.45; color: {t.text};">
 <li><b>Varias cuentas</b> — selector y gestor (añadir, editar, eliminar)</li>
-<li><b>OAuth2</b> — Gmail y Outlook; hosting / cPanel con SSL y STARTTLS</li>
+<li><b>OAuth2</b> — Gmail, Outlook, Hotmail, MSN; hosting / cPanel con SSL y STARTTLS</li>
+<li><b>Presets</b> — AOL, Yahoo, Hotmail, MSN y detección automática por dominio</li>
 <li><b>Bandeja del sistema</b> — minimizar sin cerrar; Salir cierra por completo</li>
 <li><b>Sincronización incremental</b> y caché SQLite (apertura rápida)</li>
 <li><b>Clasificación</b> — normal, importante, spam (filtro y colores)</li>
