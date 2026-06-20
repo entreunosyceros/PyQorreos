@@ -19,6 +19,7 @@ PyQorreos/
     │   ├── mail_cache.py           # Caché SQLite de cabeceras y cuerpos
     │   ├── classifier.py           # Clasificación spam / importante
     │   ├── email_html.py           # Preparación HTML para lectura
+    │   ├── email_charset.py        # Charsets MIME (unknown-8bit, etc.)
     │   ├── translate.py            # Traducción de mensajes (deep-translator)
     │   ├── network_errors.py       # Mensajes de error legibles (red/IMAP/SMTP)
     │   ├── list_unsubscribe.py     # Cabecera List-Unsubscribe
@@ -31,7 +32,8 @@ PyQorreos/
     │   ├── user_preferences.py     # Preferencias de la aplicación
     │   ├── folder_utils.py         # Árbol de carpetas y utilidades IMAP
     │   ├── message_attachments.py  # Extracción de adjuntos MIME
-    │   └── oauth.py                # Base OAuth2 (Gmail / Outlook)
+    │   ├── oauth.py                # OAuth2 (Gmail / Outlook)
+    │   └── oauth_clients.py        # Client ID/secret OAuth en disco
     ├── img/
     │   ├── logos.png
     │   └── folders/                # Iconos SVG de carpetas

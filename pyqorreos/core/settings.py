@@ -22,7 +22,6 @@ CONFIG_DIR = Path.home() / ".config" / "pyqorreos"
 ACCOUNTS_FILE = CONFIG_DIR / "accounts.json"
 CLASSIFICATION_FILE = CONFIG_DIR / "classification.json"
 
-
 class Settings:
     """Persistencia de cuentas y contraseñas."""
 

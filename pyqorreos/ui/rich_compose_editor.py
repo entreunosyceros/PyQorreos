@@ -42,7 +42,8 @@ class RichComposeEditor(QWidget):
         if self._theme:
             return self._theme
         return resolve_theme_from_parent(self.parent())
-
+    # Resuelve el tema del editor.
+    # Construye la interfaz de usuario.
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -82,6 +83,7 @@ class RichComposeEditor(QWidget):
 
         self.toolbar.addSeparator()
 
+        # Añade acciones para listas.
         for label, tip, slot in (
             ("• Lista", "Lista con viñetas", self._bullet_list),
             ("1. Lista", "Lista numerada", self._numbered_list),
@@ -216,7 +218,7 @@ class RichComposeEditor(QWidget):
             cursor.mergeCharFormat(fmt)
         else:
             cursor.insertText(url, fmt)
-
+    # Inserta una imagen en el cuerpo del mensaje.
     def _insert_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,

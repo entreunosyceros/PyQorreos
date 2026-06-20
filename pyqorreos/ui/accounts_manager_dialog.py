@@ -56,6 +56,7 @@ class AccountsManagerDialog(QDialog):
         layout = QVBoxLayout(self)
 
         hint = QLabel(
+            "Selecciona una cuenta y pulsa «Editar» (o doble clic) para cambiar sus datos. "
             "Puedes configurar varias cuentas y cambiar entre ellas desde el selector "
             "de la ventana principal."
         )
@@ -64,7 +65,8 @@ class AccountsManagerDialog(QDialog):
         layout.addWidget(hint)
 
         self.account_list = QListWidget()
-        self.account_list.itemDoubleClicked.connect(self._use_selected)
+        self.account_list.itemDoubleClicked.connect(self._edit_account)
+        self.account_list.itemSelectionChanged.connect(self._update_action_states)
         layout.addWidget(self.account_list)
 
         btn_row = QHBoxLayout()
@@ -104,10 +106,15 @@ class AccountsManagerDialog(QDialog):
         for account in self.accounts:
             item = QListWidgetItem(self._account_label(account))
             item.setData(Qt.ItemDataRole.UserRole, account.id)
+            self.account_list.addItem(item)
             if account.id == self.current_account_id:
                 item.setSelected(True)
                 self.account_list.setCurrentItem(item)
-            self.account_list.addItem(item)
+        if self.account_list.currentItem() is None and self.account_list.count() > 0:
+            self.account_list.setCurrentRow(0)
+        self._update_action_states()
+
+    def _update_action_states(self) -> None:
         has_selection = self.account_list.currentItem() is not None
         self.btn_edit.setEnabled(has_selection)
         self.btn_remove.setEnabled(has_selection)
@@ -151,11 +158,15 @@ class AccountsManagerDialog(QDialog):
         self.selected_account_id = account.id
         self.current_account_id = account.id
         self._refresh_list()
-        QMessageBox.information(
+        reply = QMessageBox.question(
             self,
             "Cuenta añadida",
-            f"Se añadió {account.email}. Pulsa «Usar esta cuenta» o cierra para conectar.",
+            f"Se añadió {account.email}.\n\n¿Conectar ahora a esta cuenta?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
         )
+        if reply == QMessageBox.StandardButton.Yes:
+            self._use_selected()
 
     def _edit_account(self) -> None:
         account = self._selected_account()
@@ -170,11 +181,35 @@ class AccountsManagerDialog(QDialog):
         if dialog.exec() != AccountDialog.DialogCode.Accepted:
             return
         updated, password = dialog.get_result()
-        idx = self.accounts.index(account)
+        duplicate = next(
+            (
+                a
+                for a in self.accounts
+                if a.email.lower() == updated.email.lower() and a.id != updated.id
+            ),
+            None,
+        )
+        if duplicate:
+            QMessageBox.warning(
+                self,
+                "Correo duplicado",
+                f"Ya existe otra cuenta con {updated.email}.",
+            )
+            return
+        idx = next(
+            (i for i, a in enumerate(self.accounts) if a.id == account.id),
+            None,
+        )
+        if idx is None:
+            return
         self.accounts[idx] = updated
         if password:
             self.settings.store_password(updated.id, password)
         self.settings.save_accounts(self.accounts)
+        if self.current_account_id == account.id:
+            self.current_account_id = updated.id
+        if self.selected_account_id == account.id:
+            self.selected_account_id = updated.id
         self._refresh_list()
 
     def _remove_account(self) -> None:

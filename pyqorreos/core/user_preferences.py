@@ -10,7 +10,7 @@ from pathlib import Path
 
 PREFERENCES_FILE = Path.home() / ".config" / "pyqorreos" / "preferences.json"
 LARGE_FOLDER_THRESHOLD = 5000
-
+# Plantillas de composición de correo.
 DEFAULT_COMPOSE_SNIPPETS: list[dict[str, str]] = [
     {"name": "Saludo formal", "text": "Estimado/a,\n\n"},
     {"name": "Saludo informal", "text": "Hola,\n\n"},
@@ -19,7 +19,7 @@ DEFAULT_COMPOSE_SNIPPETS: list[dict[str, str]] = [
     {"name": "Aviso legal", "text": "\n\nEste mensaje y sus adjuntos son confidenciales."},
 ]
 
-
+# Preferencias de usuario.
 @dataclass
 class UserPreferences:
     block_remote_images: bool = True
@@ -42,6 +42,7 @@ class UserPreferences:
         return asdict(self)
 
     @classmethod
+    # Reconstruye las preferencias desde un diccionario guardado en disco.
     def from_dict(cls, data: dict) -> UserPreferences:
         known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
         filtered = {k: v for k, v in data.items() if k in known}
@@ -60,7 +61,7 @@ class UserPreferences:
         filtered["theme"] = normalize_theme(str(filtered.get("theme", "light")))
         return cls(**filtered)
 
-
+# Filtra entradas inválidas y asegura claves name/text.
 def normalize_compose_snippets(
     snippets: list[dict[str, str]] | None,
 ) -> list[dict[str, str]]:
@@ -83,7 +84,7 @@ def normalize_compose_snippets(
         )
     return cleaned
 
-
+# Lee las preferencias desde disco.
 def load_preferences() -> UserPreferences:
     prefs_dir = PREFERENCES_FILE.parent
     prefs_dir.mkdir(parents=True, exist_ok=True)
@@ -95,7 +96,7 @@ def load_preferences() -> UserPreferences:
     except (json.JSONDecodeError, TypeError):
         return UserPreferences()
 
-
+# Guarda las preferencias en disco.
 def save_preferences(prefs: UserPreferences) -> None:
     PREFERENCES_FILE.parent.mkdir(parents=True, exist_ok=True)
     PREFERENCES_FILE.write_text(

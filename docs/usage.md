@@ -27,7 +27,7 @@ La ventana permanece usable mientras conecta; no hace falta pulsar «Actualizar�
 4. Cambia de cuenta con el desplegable **Cuenta:**.
 5. Navega por el **árbol de carpetas**; **doble clic** en un mensaje (o `Enter`) para abrirlo.
 6. Usa la **barra de búsqueda** y los filtros sobre la lista de mensajes.
-7. En el visor: **Mostrar imágenes remotas**, **Traducir**, **Modo lectura** o **Texto plano** según necesites.
+7. En el visor: **Mostrar imágenes remotas** (si están bloqueadas), **Traducir**, **Modo lectura** o **Texto plano** según necesites.
 8. **Redactar** (`Ctrl+N`) o **Responder** (`Ctrl+R`) con el editor enriquecido y plantillas.
 9. Clic derecho en el listado, en una carpeta o en la bandeja del sistema para más acciones.
 10. Ajusta el comportamiento en **Archivo → Preferencias…** (`Ctrl+,`): sync, imágenes, idioma de traducción, plantillas…

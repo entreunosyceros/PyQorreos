@@ -9,22 +9,23 @@ from __future__ import annotations
 import os
 import re
 import threading
-
+# Flags de Chromium para reducir el ruido en la terminal.
 _CHROMIUM_QUIET_FLAGS = (
     "--disable-logging",
     "--log-level=3",
     "--disable-speech-api",
 )
-
+# Avisos inofensivos de Chromium en la terminal.
 _STDIO_NOISE = (
     "GBM is not supported with the current configuration",
     "Fallback to Vulkan rendering in Chromium",
     'The key "target-densitydpi" is not supported',
 )
 
+# Flag para indicar si el filtro de stderr está instalado.
 _stdout_filter_installed = False
 
-
+# Verifica si un texto es un aviso inofensivo de Chromium.
 def _is_noise(text: str) -> bool:
     return any(noise in text for noise in _STDIO_NOISE)
 
@@ -64,6 +65,7 @@ def _install_stdio_fd_filter() -> None:
 
     sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)
 
+    # Filtra los avisos de Chromium en la terminal.
     def forward() -> None:
         buffer = ""
         with os.fdopen(read_fd, "r", encoding="utf-8", errors="replace") as reader:
@@ -93,6 +95,7 @@ def configure_webengine_environment() -> None:
     if not isinstance(sys.stderr, _FilteredStream):
         pass  # ya reemplazado por fdopen tras el filtro de descriptor
 
+    # Añade flags de Chromium para reducir el ruido en la terminal.
     existing = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").split()
     for flag in _CHROMIUM_QUIET_FLAGS:
         if flag not in existing:
@@ -138,18 +141,21 @@ def _strip_legacy_link_overlay(html: str) -> str:
     """Elimina restos de la inyección antigua (style/script en el cuerpo)."""
     if not html or "pyq-link-warning" not in html:
         return html
+    # Elimina restos de la inyección antigua (style/script en el cuerpo).
     html = re.sub(
         r"<style[^>]*id=[\"']pyq-link-warning-style[\"'][^>]*>.*?</style>",
         "",
         html,
         flags=re.IGNORECASE | re.DOTALL,
     )
+    # Elimina restos de la inyección antigua (div en el cuerpo).
     html = re.sub(
         r"<div[^>]*id=[\"']pyq-link-warning[\"'][^>]*>\s*</div>",
         "",
         html,
         flags=re.IGNORECASE,
     )
+    # Elimina restos de la inyección antigua (script en el cuerpo).
     html = re.sub(
         r"<script[^>]*>.*?pyq-link-warning.*?</script>",
         "",
@@ -158,7 +164,7 @@ def _strip_legacy_link_overlay(html: str) -> str:
     )
     return html
 
-
+# Configuración de Qt WebEngine para reducir ruido en la terminal.
 try:
     from PySide6.QtCore import QUrl
     from PySide6.QtGui import QAction, QDesktopServices
@@ -184,6 +190,7 @@ try:
             if _is_noise(message):
                 return
 
+        # Acepta una navegación de enlace externo.
         def acceptNavigationRequest(
             self,
             url: QUrl,
@@ -212,7 +219,7 @@ try:
                     menu = QMenu(self)
                 else:
                     menu.setParent(self)
-
+                # Obtiene la URL del enlace en el menú contextual.
                 url_to_open = self._context_menu_url()
                 if url_to_open:
                     open_action = QAction("Abrir enlace en el navegador", menu)
@@ -221,11 +228,13 @@ try:
                             QUrl(url)
                         )
                     )
+                    # Inserta el enlace en el menú contextual.
                     first = menu.actions()[0] if menu.actions() else None
                     menu.insertAction(first, open_action)
                     if first is not None:
                         menu.insertSeparator(first)
 
+                # Acepta el evento si no hay acciones en el menú.
                 if not menu.actions():
                     event.accept()
                     return
@@ -235,6 +244,7 @@ try:
             except Exception:
                 event.accept()
 
+        # Obtiene la URL del enlace en el menú contextual.
         def _context_menu_url(self) -> str:
             page = self.page()
             if page is None:
@@ -251,6 +261,7 @@ try:
                 return url_from_loose_text(selected) or ""
             return ""
 
+    # Flag para indicar si el visor WebEngine está configurado.
     _HAS_QUIET_PAGE = True
 except ImportError:
     QuietWebEnginePage = None  # type: ignore[misc, assignment]

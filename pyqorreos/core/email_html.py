@@ -16,7 +16,9 @@ import urllib.request
 from email.utils import parseaddr
 from html import unescape
 
+# Máximo de imágenes remotas a descargar.
 MAX_REMOTE_IMAGES = 150
+# Máximo de bytes por imagen remota.
 MAX_IMAGE_BYTES = 1_500_000
 _USER_AGENT = "Mozilla/5.0 (compatible; PyQorreos/1.0)"
 
@@ -42,7 +44,7 @@ _ATTR_URL = re.compile(
     rf"""(?<![\w-])({'|'.join(_IMG_URL_ATTRS)})\s*=\s*["']([^"']+)["']""",
     re.IGNORECASE,
 )
-
+# Estilos base para el HTML del mensaje.
 _BASE_STYLES = """
 body, div, p, td, th, li, span {
     color: #1a1a1a !important;
@@ -89,23 +91,23 @@ _HAS_HTML_TAG = re.compile(r"<html[\s>]", re.IGNORECASE)
 _HAS_HEAD_CLOSE = re.compile(r"</head>", re.IGNORECASE)
 _HAS_BODY_TAG = re.compile(r"<body[\s>]", re.IGNORECASE)
 
-
+# Normaliza la URL de una imagen remota.
 def _normalize_remote_url(url: str) -> str:
     url = unescape(url.strip().strip('"').strip("'"))
     if url.startswith("//"):
         return "https:" + url
     return url
 
-
+# Verifica si la URL es de una imagen remota.
 def _is_remote_image_url(url: str) -> bool:
     normalized = _normalize_remote_url(url)
     return normalized.startswith(("http://", "https://"))
 
-
+# Verifica si la URL es un marcador de bloqueo de imagen.
 def _is_blocked_placeholder(url: str) -> bool:
     return _BLOCKED_IMG_PLACEHOLDER in url
 
-
+# Analiza un srcset para extraer URLs y descriptores.
 def _parse_srcset(value: str) -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = []
     for part in value.split(","):
@@ -118,14 +120,14 @@ def _parse_srcset(value: str) -> list[tuple[str, str]]:
         items.append((url, descriptor))
     return items
 
-
+# Formatea un srcset para una cadena de URLs y descriptores.
 def _format_srcset(items: list[tuple[str, str]]) -> str:
     parts: list[str] = []
     for url, descriptor in items:
         parts.append(f"{url} {descriptor}".strip() if descriptor else url)
     return ", ".join(parts)
 
-
+# Reemplaza la URL de un atributo en un tag HTML.
 def _replace_attr_url(tag: str, attr: str, new_url: str) -> str:
     pattern = re.compile(
         rf"""(?<![\w-])({re.escape(attr)})\s*=\s*["'][^"']*["']""",
@@ -135,7 +137,7 @@ def _replace_attr_url(tag: str, attr: str, new_url: str) -> str:
         return pattern.sub(f'{attr}="{new_url}"', tag, count=1)
     return tag
 
-
+# Bloquea las imágenes remotas en un tag HTML.
 def _block_img_tag(tag: str) -> str:
     for match in list(_ATTR_URL.finditer(tag)):
         attr, url = match.group(1).lower(), match.group(2)
@@ -164,7 +166,7 @@ def _block_img_tag(tag: str) -> str:
                 tag = tag.replace("<img", f'<img data-blocked-srcset="{original}"', 1)
     return tag
 
-
+# Restaura las URLs de las imágenes remotas en un tag HTML.
 def _restore_img_tag(tag: str) -> str:
     for attr in _IMG_URL_ATTRS:
         blocked = re.search(
@@ -196,7 +198,7 @@ def _restore_img_tag(tag: str) -> str:
         )
     return tag
 
-
+# Embedda las imágenes remotas en un tag HTML.
 def _embed_img_tag(tag: str, embedder: _RemoteImageEmbedder) -> str:
     tag = _restore_img_tag(tag)
     for match in list(_ATTR_URL.finditer(tag)):
@@ -223,10 +225,10 @@ def _embed_img_tag(tag: str, embedder: _RemoteImageEmbedder) -> str:
         )
     return tag
 
-
+# Restaura las URLs de las imágenes remotas en un HTML.
 def _unblock_remaining_placeholders(html: str) -> str:
     """Si la descarga falla, deja la URL original para que el visor intente cargarla."""
-
+    # Reemplaza las URLs de las imágenes remotas en un HTML.
     def replacer(match: re.Match[str]) -> str:
         tag = match.group(0)
         if _BLOCKED_IMG_PLACEHOLDER not in tag:
@@ -285,13 +287,13 @@ _TAG_WITH_BG = re.compile(
     re.IGNORECASE,
 )
 
-
+# Inserta un fragmento antes del cierre de un tag HTML.
 def _insert_before_tag_close(tag: str, fragment: str) -> str:
     if tag.endswith("/>"):
         return tag[:-2] + f" {fragment}/>"
     return tag[:-1] + f" {fragment}>"
 
-
+# Bloquea el fondo de un tag HTML.
 def _block_bg_tag(tag: str) -> str:
     match = _BG_ATTR.search(tag)
     if not match or not _is_remote_image_url(match.group(2)):
@@ -302,7 +304,7 @@ def _block_bg_tag(tag: str) -> str:
         tag = _insert_before_tag_close(tag, f'data-blocked-background="{url}"')
     return tag
 
-
+# Restaura el fondo de un tag HTML.
 def _restore_bg_tag(tag: str) -> str:
     blocked = re.search(
         r"""data-blocked-background\s*=\s*["']([^"']+)["']""",
@@ -314,7 +316,7 @@ def _restore_bg_tag(tag: str) -> str:
     url = unescape(blocked.group(1))
     return _BG_ATTR.sub(f'background="{url}"', tag, count=1)
 
-
+# Embedda el fondo de un tag HTML.
 def _embed_bg_tag(tag: str, embedder: _RemoteImageEmbedder) -> str:
     tag = _restore_bg_tag(tag)
     match = _BG_ATTR.search(tag)
@@ -335,19 +337,19 @@ def _embed_bg_tag(tag: str, embedder: _RemoteImageEmbedder) -> str:
         tag = _BG_ATTR.sub(f'background="{embedder.embed(url)}"', tag, count=1)
     return tag
 
-
+# Bloquea los atributos de fondo en un HTML.
 def _block_background_attrs(html: str) -> str:
     return _TAG_WITH_BG.sub(lambda m: _block_bg_tag(m.group(0)), html)
 
-
+# Restaura los atributos de fondo en un HTML.
 def _restore_background_attrs(html: str) -> str:
     return _TAG_WITH_BG.sub(lambda m: _restore_bg_tag(m.group(0)), html)
 
-
+# Embedda los atributos de fondo en un HTML.
 def _embed_background_attrs(html: str, embedder: _RemoteImageEmbedder) -> str:
     return _TAG_WITH_BG.sub(lambda m: _embed_bg_tag(m.group(0), embedder), html)
 
-
+# Embedder de imágenes remotas.
 class _RemoteImageEmbedder:
     def __init__(
         self,
@@ -397,7 +399,7 @@ class _RemoteImageEmbedder:
         except (urllib.error.URLError, OSError, ValueError):
             return url
 
-
+# Recoge las imágenes cid en un mensaje.
 def _collect_cid_images(msg: email.message.Message) -> dict[str, str]:
     cid_map: dict[str, str] = {}
     for part in msg.walk():
@@ -418,7 +420,7 @@ def _collect_cid_images(msg: email.message.Message) -> dict[str, str]:
         cid_map[cid.lower()] = data_url
     return cid_map
 
-
+# Reemplaza las referencias cid en un HTML.
 def _replace_cid_references(html: str, cid_map: dict[str, str]) -> str:
     if not cid_map:
         return html
@@ -435,7 +437,7 @@ def _replace_cid_references(html: str, cid_map: dict[str, str]) -> str:
         html = re.sub(rf"cid:{re.escape(cid)}", data_url, html, flags=re.IGNORECASE)
     return html
 
-
+# Embedda las imágenes remotas en un HTML.
 def _embed_remote_img_tags(html: str, embedder: _RemoteImageEmbedder) -> str:
     return _IMG_TAG.sub(lambda m: _embed_img_tag(m.group(0), embedder), html)
 
@@ -455,7 +457,7 @@ def _embed_remote_css_urls(html: str, embedder: _RemoteImageEmbedder) -> str:
 
     return _CSS_URL.sub(replacer, html)
 
-
+# Embedda las imágenes remotas en un HTML.
 def _embed_remote_images(html: str, referer: str = "") -> str:
     embedder = _RemoteImageEmbedder(referer=referer)
     html = _embed_remote_img_tags(html, embedder)
@@ -463,10 +465,10 @@ def _embed_remote_images(html: str, referer: str = "") -> str:
     html = _embed_remote_css_urls(html, embedder)
     return html
 
-
+# Bloquea las imágenes remotas en un HTML.
 def block_remote_images_in_html(html: str) -> str:
     """Sustituye imágenes http(s) por un marcador de bloqueo."""
-
+    # Reemplaza las URLs de las imágenes remotas en un HTML.
     def css_replacer(match: re.Match[str]) -> str:
         url = match.group(1).strip().strip('"').strip("'")
         if _is_remote_image_url(url):
@@ -482,7 +484,7 @@ def block_remote_images_in_html(html: str) -> str:
     html = _CSS_URL.sub(css_replacer, html)
     return html
 
-
+# Restaura las URLs http(s) sustituidas por el bloqueador de privacidad.
 def restore_blocked_remote_images(html: str) -> str:
     """Restaura las URLs http(s) sustituidas por el bloqueador de privacidad."""
     html = _IMG_TAG.sub(lambda m: _restore_img_tag(m.group(0)), html)
@@ -497,7 +499,7 @@ def restore_blocked_remote_images(html: str) -> str:
     )
     return html
 
-
+# Restaura y descarga imágenes remotas en HTML ya mostrado al usuario.
 def load_remote_images_in_html(html: str, referer: str = "") -> str:
     """Restaura y descarga imágenes remotas en HTML ya mostrado al usuario."""
     if not html.strip():
@@ -509,12 +511,12 @@ def load_remote_images_in_html(html: str, referer: str = "") -> str:
 
     return sanitize_email_html_for_viewer(html)
 
-
+# Cuenta cuántas marcas de imagen bloqueada quedan en el HTML.
 def count_blocked_image_placeholders(html: str) -> int:
     """Cuenta cuántas marcas de imagen bloqueada quedan en el HTML."""
     return html.count(BLOCKED_IMAGE_PLACEHOLDER_MARKER)
 
-
+# Inserta estilos de legibilidad sin romper documentos HTML completos.
 def _inject_base_styles(html: str) -> str:
     """Inserta estilos de legibilidad sin romper documentos HTML completos."""
     style_block = f"<style type='text/css'>{_BASE_STYLES}</style>"
@@ -535,14 +537,14 @@ def _inject_base_styles(html: str) -> str:
         f"{style_block}</head><body>{html}</body></html>"
     )
 
-
+# Obtiene la URL base de un remitente.
 def _base_url_from_sender(sender: str) -> str:
     _name, addr = parseaddr(sender)
     if "@" in addr:
         return f"https://{addr.split('@', 1)[1]}/"
     return "https://localhost/"
 
-
+# Prepara el HTML para mostrarlo en el visor.
 def prepare_html_for_display(
     msg: email.message.Message,
     html: str,
@@ -567,16 +569,16 @@ def prepare_html_for_display(
     html = sanitize_email_html_for_viewer(html)
     return inject_link_safety_overlay(html)
 
-
+# Descarga imágenes http(s) en un HTML ya preparado (sin volver a leer IMAP).
 def embed_remote_images_in_html(html: str, referer: str = "") -> str:
     """Descarga imágenes http(s) en un HTML ya preparado (sin volver a leer IMAP)."""
     return load_remote_images_in_html(html, referer=referer)
 
-
+# Obtiene la URL base de un mensaje.
 def base_url_for_message(sender: str) -> str:
     return _base_url_from_sender(sender)
 
-
+# Estilos mínimos de lectura sobre el HTML del mensaje.
 _READING_MODE_STYLES = """
 body {
     max-width: 42rem !important;
@@ -619,18 +621,42 @@ def apply_reading_mode_styles(html: str) -> str:
     )
 
 
+def _strip_email_html_boilerplate(html: str) -> str:
+    """Quita cabecera, comentarios y bloques CSS/JS antes de extraer texto."""
+    html = re.sub(r"(?is)<!--.*?-->", "", html)
+    html = re.sub(r"(?is)<head[^>]*>.*?</head>", "", html)
+    html = re.sub(r"(?is)<script[^>]*>.*?</script>", "", html)
+    html = re.sub(r"(?is)<style[^>]*>.*?</style>", "", html)
+    # Newsletters con <style> sin cerrar (filtra font-size:96%, etc.).
+    html = re.sub(
+        r"(?is)<style[^>]*>.*?(?=</style>|<body\b|<div\b|<p\b|<table\b|"
+        r"<td\b|<tr\b|<ul\b|<ol\b|<h[1-6]\b|$)",
+        "",
+        html,
+    )
+    html = re.sub(r"(?is)<script[^>]*>.*", "", html)
+    return html
+
+
+def _list_item_to_plain(match: re.Match[str]) -> str:
+    inner = re.sub(r"<[^>]+>", " ", match.group(1))
+    inner = re.sub(r"\s+", " ", inner).strip()
+    if not inner:
+        return ""
+    return f"• {inner}\n"
+
+
 def html_to_plain_text(html: str) -> str:
     """Extrae texto legible del HTML sin dependencias externas."""
-    from html import unescape
-
     if not html.strip():
         return ""
-    text = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", html)
+    text = _strip_email_html_boilerplate(html)
     text = re.sub(r"(?i)<br\s*/?>", "\n", text)
     text = re.sub(r"(?i)</p\s*>", "\n\n", text)
     text = re.sub(r"(?i)</div\s*>", "\n", text)
     text = re.sub(r"(?i)</tr\s*>", "\n", text)
-    text = re.sub(r"(?i)<li[^>]*>", "• ", text)
+    text = re.sub(r"(?i)<li[^>]*>\s*</li>", "", text)
+    text = re.sub(r"(?is)<li[^>]*>(.*?)</li>", _list_item_to_plain, text)
     text = re.sub(r"<[^>]+>", "", text)
     text = unescape(text)
     text = re.sub(r"[ \t]+\n", "\n", text)

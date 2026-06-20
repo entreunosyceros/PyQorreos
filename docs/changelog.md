@@ -6,6 +6,16 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ---
 
+## Hosting, lectura y traducción (reciente)
+
+- Preset **Hosting / cPanel (Webempresa, etc.)** con IMAP/SMTP **SSL/TLS** y **STARTTLS** configurables.
+- Corrección de charsets MIME **`unknown-8bit`** y similares al descargar mensajes (`email_charset.py`).
+- **Imágenes remotas**: el botón «Mostrar imágenes remotas» restaura URLs bloqueadas en HTML y CSS aunque el cuerpo esté en caché.
+- **Traducción**: extracción de texto mejorada desde HTML; filtrado de ruido de newsletters (`96`, viñetas vacías, CSS suelto); elección inteligente entre parte texto y HTML; traducción fiable al cambiar de mensaje.
+- **Varias cuentas**: reconexión IMAP al usar hilos de lectura/sincronización en paralelo.
+- Gestor de cuentas: **editar** cuenta existente; **mostrar contraseña** en el diálogo de alta/edición.
+- Cierre limpio con **Archivo → Salir** o `Ctrl+C` en terminal; ventana maximizada en el monitor principal al arrancar.
+
 ## Arranque y sincronización
 
 - **Al abrir la aplicación** se muestra de inmediato la caché local de INBOX (sin esperar a IMAP).
@@ -62,6 +72,7 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 |---------|---------|
 | `pyqorreos/ui/theme.py` | Tema claro/oscuro y estilos globales |
 | `pyqorreos/core/network_errors.py` | Mensajes de error legibles |
+| `pyqorreos/core/email_charset.py` | Normalización de charsets MIME (`unknown-8bit`, etc.) |
 | `pyqorreos/core/translate.py` | Traducción y HTML de lectura |
 | `pyqorreos/core/link_safety.py` | Anti-phishing y URLs sueltas |
 | `docs/` | Documentación segmentada |

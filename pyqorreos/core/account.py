@@ -36,6 +36,7 @@ class MailAccount:
     def from_dict(cls, data: dict[str, Any]) -> MailAccount:
         """Reconstruye una cuenta desde un diccionario guardado en disco."""
         return cls(
+            
             email=data.get("email", ""),
             display_name=data.get("display_name", ""),
             imap_host=data.get("imap_host", ""),
@@ -76,13 +77,37 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "use_ssl": True,
         "use_starttls": True,
     },
+    "Hosting / cPanel (Webempresa, etc.)": {
+        "imap_host": "mail.tudominio.com",
+        "imap_port": 993,
+        "smtp_host": "mail.tudominio.com",
+        "smtp_port": 465,
+        "use_ssl": True,
+        "use_starttls": True,
+    },
     "Personalizado": {},
 }
-
+# URLs de ayuda para la autenticación de Gmail
 GMAIL_APP_PASSWORD_URL = "https://myaccount.google.com/apppasswords"
 GMAIL_APP_PASSWORD_HELP_URL = "https://support.google.com/accounts/answer/185833"
 
 
+def detect_provider_preset(account: MailAccount) -> str:
+    """Devuelve el preset de proveedor que coincide con los servidores de la cuenta."""
+    imap = account.imap_host.strip().lower()
+    if not imap:
+        return "Personalizado"
+    if imap.startswith("mail.") or imap.startswith("imap."):
+        return "Hosting / cPanel (Webempresa, etc.)"
+    for name, preset in PROVIDER_PRESETS.items():
+        if name == "Personalizado":
+            continue
+        preset_host = str(preset.get("imap_host", "")).strip().lower()
+        if preset_host and preset_host == imap:
+            return name
+    return "Personalizado"
+
+# Verifica si la configuración apunta a una cuenta Gmail
 def is_gmail_account(
     *,
     provider: str = "",

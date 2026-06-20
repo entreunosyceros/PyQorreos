@@ -19,7 +19,7 @@ THEME_CHOICES = (THEME_LIGHT, THEME_DARK)
 
 _CURRENT_THEME = THEME_LIGHT
 
-
+# Tokens de colores para el tema.
 @dataclass(frozen=True)
 class ThemeTokens:
     bg_window: str
@@ -52,16 +52,16 @@ class ThemeTokens:
     tree_hover: str
     link: str
 
-
+# Normaliza el nombre de un tema.
 def normalize_theme(value: str) -> str:
     value = (value or "").strip().lower()
     return value if value in THEME_CHOICES else THEME_LIGHT
 
-
+# Obtiene el tema actual.
 def current_theme() -> str:
     return _CURRENT_THEME
 
-
+# Obtiene los tokens de colores para un tema.
 def theme_tokens(theme: str | None = None) -> ThemeTokens:
     theme = normalize_theme(theme or _CURRENT_THEME)
     if theme == THEME_DARK:
@@ -96,6 +96,7 @@ def theme_tokens(theme: str | None = None) -> ThemeTokens:
             tree_hover="#404040",
             link="#7eb8f0",
         )
+    # Tokens de colores para el tema claro.
     return ThemeTokens(
         bg_window="#f8f8f8",
         bg_panel="#ffffff",
@@ -128,11 +129,11 @@ def theme_tokens(theme: str | None = None) -> ThemeTokens:
         link="#1a5fb4",
     )
 
-
+# Obtiene el color de énfasis para un tema.
 def accent_color(theme: str | None = None) -> str:
     return theme_tokens(theme).accent
 
-
+# Obtiene los colores de categoría para un tema.
 def category_colors(theme: str | None = None) -> dict:
     from pyqorreos.core.classifier import MailCategory
 
@@ -149,7 +150,7 @@ def category_colors(theme: str | None = None) -> dict:
         MailCategory.SPAM: QColor(255, 235, 235),
     }
 
-
+# Obtiene el color de texto para un tema.
 def text_color(theme: str | None = None) -> QColor:
     t = theme_tokens(theme)
     return QColor(t.text)
@@ -159,23 +160,23 @@ def prevent_context_menu(widget: QWidget) -> None:
     """Evita menús contextuales del sistema que pueden cerrar la app en Linux."""
     widget.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
 
-
+# Polishes a widget.
 def polish_widget(widget: QWidget) -> None:
     style = widget.style()
     style.unpolish(widget)
     style.polish(widget)
 
-
+# Marca un widget con un rol.
 def mark_role(widget: QWidget, role: str) -> None:
     widget.setProperty("pyqRole", role)
     polish_widget(widget)
 
-
+# Marca un widget con un nombre de objeto.
 def mark_object(widget: QWidget, object_name: str) -> None:
     widget.setObjectName(object_name)
     polish_widget(widget)
 
-
+# Genera el bloque de estilos para un botón.
 def _button_block(t: ThemeTokens, role: str) -> str:
     if role == "primary":
         return f"""
@@ -255,6 +256,7 @@ def _button_block(t: ThemeTokens, role: str) -> str:
             background-color: {t.btn_pressed};
         }}
         """
+    # Genera el bloque de estilos para un botón por defecto.
     return f"""
     QPushButton[pyqRole="default"], QPushButton {{
         background-color: {t.btn_bg};
@@ -280,7 +282,7 @@ def _button_block(t: ThemeTokens, role: str) -> str:
     }}
     """
 
-
+# Genera la hoja de estilos para la aplicación.
 def app_stylesheet(theme: str) -> str:
     t = theme_tokens(theme)
     buttons = "".join(_button_block(t, role) for role in ("default", "primary", "secondary", "danger", "category"))
@@ -464,7 +466,7 @@ def app_stylesheet(theme: str) -> str:
     {buttons}
     """
 
-
+# Genera la hoja de estilos para el editor de redacción.
 def compose_document_stylesheet(theme: str | None = None) -> str:
     t = theme_tokens(theme)
     return f"""
@@ -487,21 +489,23 @@ def compose_document_stylesheet(theme: str | None = None) -> str:
     }}
     """
 
-
+# Genera la hoja de estilos para el visor de mensajes.
 def message_surface_stylesheet(theme: str | None = None) -> str:
     t = theme_tokens(theme)
     return f"background: {t.bg_panel};"
 
-
+# Genera el HTML de características de la aplicación.
 def about_features_html(theme: str | None = None) -> str:
     t = theme_tokens(theme)
     return f"""
 <ul style="margin: 0; padding-left: 1.2em; line-height: 1.45; color: {t.text};">
 <li><b>Varias cuentas</b> — selector y gestor (añadir, editar, eliminar)</li>
-<li><b>Bandeja del sistema</b> — minimizar sin cerrar la aplicación</li>
+<li><b>OAuth2</b> — Gmail y Outlook; hosting / cPanel con SSL y STARTTLS</li>
+<li><b>Bandeja del sistema</b> — minimizar sin cerrar; Salir cierra por completo</li>
 <li><b>Sincronización incremental</b> y caché SQLite (apertura rápida)</li>
 <li><b>Clasificación</b> — normal, importante, spam (filtro y colores)</li>
-<li><b>Visor HTML</b> — maquetado fiel (WebEngine, imágenes cid y remotas)</li>
+<li><b>Visor HTML</b> — WebEngine, imágenes cid y remotas bajo demanda</li>
+<li><b>Traducción</b> — bajo demanda al idioma de Preferencias</li>
 <li><b>Responder / reenviar / eliminar</b> — barra de herramientas y menú contextual</li>
 <li><b>Editor enriquecido</b> — negrita, cursiva, listas, enlaces, imágenes</li>
 <li><b>Tema claro y oscuro</b> — Preferencias → Apariencia</li>
@@ -509,7 +513,7 @@ def about_features_html(theme: str | None = None) -> str:
 </ul>
 """
 
-
+# Resuelve el tema desde el padre o las preferencias.
 def resolve_theme_from_parent(parent) -> str:
     if parent is not None and hasattr(parent, "_prefs"):
         return normalize_theme(parent._prefs.theme)
@@ -517,7 +521,7 @@ def resolve_theme_from_parent(parent) -> str:
 
     return normalize_theme(load_preferences().theme)
 
-
+# Aplica paleta y hoja de estilos global.
 def apply_app_theme(app: QApplication, theme: str) -> str:
     """Aplica paleta y hoja de estilos global. Devuelve el tema normalizado."""
     global _CURRENT_THEME
@@ -541,7 +545,7 @@ def apply_app_theme(app: QApplication, theme: str) -> str:
     app.setStyleSheet(app_stylesheet(theme))
     return theme
 
-
+# Actualiza estilos del visor de mensajes.
 def apply_message_viewer_theme(viewer, theme: str | None = None) -> None:
     """Actualiza estilos del visor de mensajes."""
     theme = normalize_theme(theme or _CURRENT_THEME)
@@ -554,7 +558,7 @@ def apply_message_viewer_theme(viewer, theme: str | None = None) -> None:
     if hasattr(viewer, "_text"):
         mark_object(viewer._text, "pyqMessageSurface")
 
-
+# Actualiza estilos del editor de redacción.
 def apply_compose_editor_theme(editor, theme: str | None = None) -> None:
     """Actualiza estilos del editor de redacción."""
     theme = normalize_theme(theme or _CURRENT_THEME)

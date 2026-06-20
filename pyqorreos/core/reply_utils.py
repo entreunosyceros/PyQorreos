@@ -32,20 +32,20 @@ class ComposeDraft:
     body: str = ""
     body_html: str = ""
 
-
+# Normaliza el asunto de un mensaje.
 def _normalize_subject(subject: str, prefix: str) -> str:
     subject = subject.strip() or "(Sin asunto)"
     if subject.lower().startswith(prefix.lower()):
         return subject
     return f"{prefix}{subject}"
 
-
+# Formatea la fecha de un mensaje.
 def _format_date(message: MailMessage) -> str:
     if message.date:
         return message.date.strftime("%d/%m/%Y %H:%M")
     return ""
 
-
+# Cita el encabezado de un mensaje en texto plano.
 def _quote_header_plain(message: MailMessage) -> str:
     return (
         "---------- Mensaje original ----------\n"
@@ -55,7 +55,7 @@ def _quote_header_plain(message: MailMessage) -> str:
         f"Asunto: {message.subject}\n"
     )
 
-
+# Cita el encabezado de un mensaje en HTML.
 def _quote_header_html(message: MailMessage) -> str:
     return (
         '<table style="color:#666;font-size:10pt;margin:0 0 12px 0;'
@@ -67,7 +67,7 @@ def _quote_header_html(message: MailMessage) -> str:
         "</table>"
     )
 
-
+# Obtiene el fragmento interior de un documento HTML completo.
 def _extract_html_body(html: str) -> str:
     """Obtiene el fragmento interior de un documento HTML completo."""
     html = html.strip()
@@ -78,7 +78,7 @@ def _extract_html_body(html: str) -> str:
         return match.group(1).strip()
     return html
 
-
+# Texto plano aproximado cuando no hay parte text/plain.
 def _html_to_plain_fallback(html: str) -> str:
     """Texto plano aproximado cuando no hay parte text/plain."""
     text = _STRIP_TAGS.sub(" ", html)
@@ -87,7 +87,7 @@ def _html_to_plain_fallback(html: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     return re.sub(r" +", " ", text).strip()
 
-
+# Cita el contenido de un mensaje en HTML.
 def _quoted_content_html(message: MailMessage) -> str:
     if message.body_html.strip():
         return _extract_html_body(message.body_html)

@@ -47,6 +47,7 @@ class MessageViewer(QWidget):
 
     load_remote_images_requested = Signal()
     translate_requested = Signal()
+    restore_original_requested = Signal()
     link_hover_changed = Signal(str)
 
     def __init__(self, parent=None) -> None:
@@ -89,7 +90,7 @@ class MessageViewer(QWidget):
         self._btn_translate.setToolTip(
             "Traducir el mensaje al idioma configurado en Preferencias"
         )
-        self._btn_translate.clicked.connect(self.translate_requested.emit)
+        self._btn_translate.clicked.connect(self._on_translate_button_clicked)
         toolbar.addWidget(self._btn_translate)
         toolbar.addStretch(1)
         for btn in (
@@ -253,8 +254,19 @@ class MessageViewer(QWidget):
     def is_showing_translation(self) -> bool:
         return self._showing_translation
 
+    def prepare_for_new_message(self) -> None:
+        """Restaura el estado del visor al cambiar de mensaje."""
+        self._reset_translation_state()
+        self._clear_link_hover()
+
+    def _on_translate_button_clicked(self) -> None:
+        if self._showing_translation:
+            self.restore_original_requested.emit()
+        else:
+            self.translate_requested.emit()
+
     def set_translate_available(self, available: bool) -> None:
-        self._btn_translate.setVisible(available and not self._showing_translation)
+        self._btn_translate.setVisible(available)
 
     def show_translated(self, text: str, language_label: str = "") -> None:
         """Muestra la traducción con maquetado de lectura en el visor HTML."""
@@ -382,8 +394,7 @@ class MessageViewer(QWidget):
         if not html.strip():
             self.show_plain("(Mensaje vacío)")
             return
-        self._reset_translation_state()
-        self._clear_link_hover()
+        self.prepare_for_new_message()
         self._stored_html = html
         self._stored_base_url = base_url
         self._remote_blocked = remote_blocked

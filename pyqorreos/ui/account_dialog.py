@@ -13,6 +13,7 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from pyqorreos.core.account import (
@@ -32,6 +34,7 @@ from pyqorreos.core.account import (
     GMAIL_APP_PASSWORD_URL,
     PROVIDER_PRESETS,
     MailAccount,
+    detect_provider_preset,
     is_gmail_account,
 )
 from pyqorreos.core.mail_service import MailService
@@ -127,6 +130,7 @@ class AccountDialog(QDialog):
         self.imap_port_spin = QSpinBox()
         self.imap_port_spin.setRange(1, 65535)
         self.imap_port_spin.setValue(993)
+        self.imap_port_spin.valueChanged.connect(self._suggest_tls_from_ports)
         form.addRow("Puerto IMAP:", self.imap_port_spin)
 
         self.smtp_host_edit = QLineEdit()
@@ -135,15 +139,45 @@ class AccountDialog(QDialog):
         self.smtp_port_spin = QSpinBox()
         self.smtp_port_spin.setRange(1, 65535)
         self.smtp_port_spin.setValue(587)
+        self.smtp_port_spin.valueChanged.connect(self._on_smtp_port_changed)
         form.addRow("Puerto SMTP:", self.smtp_port_spin)
+
+        self.imap_tls_combo = QComboBox()
+        self.imap_tls_combo.addItems(
+            [
+                "SSL/TLS (recomendado, p. ej. puerto 993)",
+                "STARTTLS (p. ej. puerto 143)",
+                "Sin cifrar (no recomendado)",
+            ]
+        )
+        self.imap_tls_combo.currentIndexChanged.connect(self._on_tls_changed)
+        form.addRow("Seguridad IMAP:", self.imap_tls_combo)
+
+        self.smtp_tls_combo = QComboBox()
+        self.smtp_tls_combo.addItems(
+            [
+                "SSL/TLS (p. ej. puerto 465)",
+                "STARTTLS (p. ej. puerto 587)",
+                "Sin cifrar (no recomendado)",
+            ]
+        )
+        self.smtp_tls_combo.currentIndexChanged.connect(self._on_tls_changed)
+        form.addRow("Seguridad SMTP:", self.smtp_tls_combo)
 
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_edit.setPlaceholderText(
             "Dejar vacío para mantener la actual" if self.account else ""
         )
+        self.show_password_check = QCheckBox("Mostrar contraseña")
+        self.show_password_check.toggled.connect(self._toggle_password_visibility)
+        self._password_row_widget = QWidget()
+        password_row = QHBoxLayout(self._password_row_widget)
+        password_row.setContentsMargins(0, 0, 0, 0)
+        password_row.addWidget(self.password_edit, 1)
+        password_row.addWidget(self.show_password_check)
         self.password_label = QLabel("Contraseña:")
-        form.addRow(self.password_label, self.password_edit)
+        form.addRow(self.password_label, self._password_row_widget)
 
         self.auth_combo = QComboBox()
         self.auth_combo.addItems(
@@ -182,7 +216,8 @@ class AccountDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-        self._on_provider_changed(self.provider_combo.currentText())
+        if not self.account:
+            self._on_provider_changed(self.provider_combo.currentText())
 
     def _oauth_provider_key(self) -> str | None:
         return detect_oauth_provider(
@@ -200,12 +235,17 @@ class AccountDialog(QDialog):
     def _on_auth_method_changed(self, _index: int) -> None:
         oauth_mode = self._is_oauth_mode()
         self.password_label.setVisible(not oauth_mode)
-        self.password_edit.setVisible(not oauth_mode)
+        self._password_row_widget.setVisible(not oauth_mode)
         for widget in self._oauth_row_widgets:
             widget.setVisible(oauth_mode)
         self._update_gmail_notice()
         self._update_oauth_availability()
         self._refresh_oauth_status()
+
+    def _toggle_password_visibility(self, visible: bool) -> None:
+        self.password_edit.setEchoMode(
+            QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        )
 
     def _update_oauth_availability(self) -> None:
         provider_key = self._oauth_provider_key()
@@ -290,6 +330,53 @@ class AccountDialog(QDialog):
             else:
                 self.password_edit.setPlaceholderText("")
 
+    def _on_smtp_port_changed(self, _port: int) -> None:
+        self._suggest_tls_from_ports()
+
+    def _suggest_tls_from_ports(self, *_args) -> None:
+        """Sugiere el modo TLS habitual según los puertos (sin pisar elección manual)."""
+        if self.imap_port_spin.value() == 993 and self.imap_tls_combo.currentIndex() == 2:
+            self.imap_tls_combo.setCurrentIndex(0)
+        elif self.imap_port_spin.value() == 143 and self.imap_tls_combo.currentIndex() == 0:
+            self.imap_tls_combo.setCurrentIndex(1)
+        if self.smtp_port_spin.value() == 465 and self.smtp_tls_combo.currentIndex() == 1:
+            self.smtp_tls_combo.setCurrentIndex(0)
+        elif self.smtp_port_spin.value() == 587 and self.smtp_tls_combo.currentIndex() == 0:
+            self.smtp_tls_combo.setCurrentIndex(1)
+
+    def _on_tls_changed(self, _index: int) -> None:
+        """Ajusta puertos típicos al elegir un modo de seguridad."""
+        if self.imap_tls_combo.currentIndex() == 0 and self.imap_port_spin.value() == 143:
+            self.imap_port_spin.setValue(993)
+        elif self.imap_tls_combo.currentIndex() == 1 and self.imap_port_spin.value() == 993:
+            self.imap_port_spin.setValue(143)
+        if self.smtp_tls_combo.currentIndex() == 0 and self.smtp_port_spin.value() == 587:
+            self.smtp_port_spin.setValue(465)
+        elif self.smtp_tls_combo.currentIndex() == 1 and self.smtp_port_spin.value() == 465:
+            self.smtp_port_spin.setValue(587)
+
+    def _apply_tls_to_form(self, account: MailAccount) -> None:
+        if account.use_ssl:
+            self.imap_tls_combo.setCurrentIndex(0)
+        elif account.use_starttls:
+            self.imap_tls_combo.setCurrentIndex(1)
+        else:
+            self.imap_tls_combo.setCurrentIndex(2)
+
+        if account.smtp_port == 465 or (account.use_ssl and not account.use_starttls):
+            self.smtp_tls_combo.setCurrentIndex(0)
+        elif account.use_starttls:
+            self.smtp_tls_combo.setCurrentIndex(1)
+        else:
+            self.smtp_tls_combo.setCurrentIndex(2)
+
+    def _tls_flags_from_form(self) -> tuple[bool, bool]:
+        imap_mode = self.imap_tls_combo.currentIndex()
+        smtp_mode = self.smtp_tls_combo.currentIndex()
+        use_ssl = imap_mode == 0 or smtp_mode == 0
+        use_starttls = imap_mode == 1 or smtp_mode == 1
+        return use_ssl, use_starttls
+
     def _on_provider_changed(self, provider: str) -> None:
         """Rellena automáticamente los campos al elegir un proveedor conocido."""
         preset = PROVIDER_PRESETS.get(provider, {})
@@ -298,6 +385,15 @@ class AccountDialog(QDialog):
             self.imap_port_spin.setValue(preset.get("imap_port", 993))
             self.smtp_host_edit.setText(preset.get("smtp_host", ""))
             self.smtp_port_spin.setValue(preset.get("smtp_port", 587))
+            self._apply_tls_to_form(
+                MailAccount(
+                    email="",
+                    use_ssl=bool(preset.get("use_ssl", True)),
+                    use_starttls=bool(preset.get("use_starttls", True)),
+                    imap_port=int(preset.get("imap_port", 993)),
+                    smtp_port=int(preset.get("smtp_port", 587)),
+                )
+            )
         self._on_identity_changed()
 
     def _load_account(self, account: MailAccount) -> None:
@@ -310,16 +406,18 @@ class AccountDialog(QDialog):
         self.imap_port_spin.setValue(account.imap_port)
         self.smtp_host_edit.setText(account.smtp_host)
         self.smtp_port_spin.setValue(account.smtp_port)
-        self.provider_combo.setCurrentText("Personalizado")
+        self.provider_combo.setCurrentText(detect_provider_preset(account))
         self.email_edit.blockSignals(False)
         self.imap_host_edit.blockSignals(False)
         self.provider_combo.blockSignals(False)
         if account.auth_method == AuthMethod.OAUTH2.value:
             self.auth_combo.setCurrentIndex(1)
         self.signature_edit.setPlainText(account.signature)
+        self._apply_tls_to_form(account)
         self._on_identity_changed()
 
     def _get_account(self) -> MailAccount:
+        use_ssl, use_starttls = self._tls_flags_from_form()
         return MailAccount(
             id=self._draft_account_id,
             email=self.email_edit.text().strip(),
@@ -328,7 +426,8 @@ class AccountDialog(QDialog):
             imap_port=self.imap_port_spin.value(),
             smtp_host=self.smtp_host_edit.text().strip(),
             smtp_port=self.smtp_port_spin.value(),
-            use_ssl=True,
+            use_ssl=use_ssl,
+            use_starttls=use_starttls,
             auth_method=(
                 AuthMethod.OAUTH2.value
                 if self._is_oauth_mode()

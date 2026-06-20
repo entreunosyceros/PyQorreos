@@ -24,20 +24,20 @@ AZURE_APP_REGISTRATIONS_URL = (
     "https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade"
 )
 
-
+# Credenciales OAuth de aplicación (client_id / client_secret) por proveedor.
 @dataclass(frozen=True)
 class OAuthClientCredentials:
     client_id: str
     client_secret: str = ""
 
-
+# Datos vacíos de OAuth de aplicación (client_id / client_secret) por proveedor.
 def _empty_oauth_clients_data() -> dict[str, dict[str, str]]:
     return {
         "gmail": {"client_id": "", "client_secret": ""},
         "outlook": {"client_id": "", "client_secret": ""},
     }
 
-
+# Lee el contenido completo de oauth_clients.json para el formulario de preferencias.
 def load_oauth_clients_data() -> dict[str, dict[str, str]]:
     """Lee el contenido completo de oauth_clients.json para el formulario de preferencias."""
     data = _empty_oauth_clients_data()
@@ -59,7 +59,7 @@ def load_oauth_clients_data() -> dict[str, dict[str, str]]:
         }
     return data
 
-
+# Persiste las credenciales OAuth en disco.
 def save_oauth_clients_data(data: dict[str, dict[str, str]]) -> None:
     """Persiste las credenciales OAuth en disco."""
     OAUTH_CLIENTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -79,7 +79,7 @@ def save_oauth_clients_data(data: dict[str, dict[str, str]]) -> None:
         encoding="utf-8",
     )
 
-
+# Valida los datos de OAuth de aplicación (client_id / client_secret) por proveedor.
 def validate_oauth_clients_data(data: dict[str, dict[str, str]]) -> str | None:
     """Devuelve un mensaje de error o None si los datos son válidos."""
     labels = {"gmail": "Gmail", "outlook": "Outlook"}
@@ -91,7 +91,7 @@ def validate_oauth_clients_data(data: dict[str, dict[str, str]]) -> str | None:
             return f"Indica el Client ID de {labels[key]}."
     return None
 
-
+# Lee las credenciales OAuth del proveedor (gmail / outlook).
 def load_oauth_client(provider_key: str) -> OAuthClientCredentials | None:
     """Lee las credenciales OAuth del proveedor (gmail / outlook)."""
     block = load_oauth_clients_data().get(provider_key, {})
@@ -103,12 +103,12 @@ def load_oauth_client(provider_key: str) -> OAuthClientCredentials | None:
         client_secret=str(block.get("client_secret", "")).strip(),
     )
 
-
+# Verifica si las credenciales OAuth están configuradas.
 def oauth_clients_configured(provider_key: str) -> bool:
     creds = load_oauth_client(provider_key)
     return creds is not None and bool(creds.client_id)
 
-
+# Instrucciones de configuración de OAuth para el formulario de preferencias.
 def oauth_setup_instructions(provider_key: str) -> str:
     name = "Gmail (Google Cloud)" if provider_key == "gmail" else "Outlook (Microsoft Entra)"
     return (
@@ -118,7 +118,7 @@ def oauth_setup_instructions(provider_key: str) -> str:
         f"URI de redirección obligatoria: {OAUTH_REDIRECT_URI}"
     )
 
-
+# Instrucciones de configuración de OAuth para Gmail.
 def gmail_oauth_setup_html() -> str:
     return (
         "<b>Gmail (Google Cloud)</b><br>"
@@ -133,7 +133,7 @@ def gmail_oauth_setup_html() -> str:
         f"URI de redirección: <code>{OAUTH_REDIRECT_URI}</code>."
     )
 
-
+# Instrucciones de configuración de OAuth para Outlook.
 def outlook_oauth_setup_html() -> str:
     return (
         "<b>Outlook / Microsoft 365 (Entra ID)</b><br>"

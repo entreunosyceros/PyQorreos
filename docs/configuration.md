@@ -19,6 +19,7 @@
 
 - Para **Gmail** puedes usar **OAuth2** (recomendado) o una [contraseña de aplicación](https://support.google.com/accounts/answer/185833).
 - Para **Outlook / Hotmail** también puedes usar **OAuth2** o contraseña de aplicación si tu cuenta lo permite.
+- Para **hosting / cPanel** (Webempresa, Raiola, etc.): elige el preset **Hosting / cPanel** al añadir la cuenta. Suele ser `mail.tudominio.com`, usuario = correo completo, IMAP **993 SSL/TLS**, SMTP **465 SSL** o **587 STARTTLS**. Usa **Probar conexión** antes de guardar.
 - En Linux, el llavero usa Secret Service (GNOME Keyring, KWallet, etc.).
 
 ### OAuth2 (Gmail y Outlook)
@@ -53,6 +54,8 @@ El `refresh_token` se guarda en el llavero de forma permanente; el `access_token
 
 - La **traducción** solo se ejecuta al pulsar «Traducir»; el texto se envía a un servicio en línea gratuito ([deep-translator](https://github.com/nidhaloff/deep-translator)).
 - Configura el idioma destino en **Archivo → Preferencias → General**.
+- El texto se extrae del mensaje (HTML o parte de texto plano) y se limpia de restos de maquetación antes de traducir; el resultado se muestra en modo lectura con enlaces activos.
+- Las traducciones se **cachean por mensaje**; «Ver original» restaura el correo sin volver a descargarlo.
 
 ### Carpetas IMAP
 

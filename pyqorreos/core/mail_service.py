@@ -20,6 +20,8 @@ from typing import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.header import decode_header
+
+from pyqorreos.core.email_charset import decode_email_bytes
 from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 from typing import Any, Callable
@@ -44,6 +46,38 @@ from pyqorreos.core.user_preferences import LARGE_FOLDER_THRESHOLD
 
 # Tamaño de lote para UID FETCH (varios mensajes por petición IMAP).
 IMAP_BATCH_SIZE = 100
+
+
+def _mail_ssl_context() -> ssl.SSLContext:
+    """Contexto TLS con certificados del sistema (Let's Encrypt, etc.)."""
+    return ssl.create_default_context()
+
+
+def _imap_starttls(conn: imaplib.IMAP4, context: ssl.SSLContext) -> None:
+    try:
+        conn.starttls(ssl_context=context)
+    except TypeError:
+        conn.starttls()
+
+
+def open_imap_connection(account: MailAccount) -> imaplib.IMAP4_SSL | imaplib.IMAP4:
+    """Abre IMAP con SSL/TLS implícito o STARTTLS según la cuenta."""
+    context = _mail_ssl_context()
+    if account.use_ssl:
+        return imaplib.IMAP4_SSL(
+            account.imap_host,
+            account.imap_port,
+            ssl_context=context,
+            timeout=IMAP_SOCKET_TIMEOUT,
+        )
+    conn = imaplib.IMAP4(
+        account.imap_host,
+        account.imap_port,
+        timeout=IMAP_SOCKET_TIMEOUT,
+    )
+    if account.use_starttls:
+        _imap_starttls(conn, context)
+    return conn
 
 _HEADER_FETCH = (
     "BODY.PEEK[HEADER.FIELDS "
@@ -101,7 +135,7 @@ def _decode_header_value(value: str | None) -> str:
     parts: list[str] = []
     for fragment, charset in decode_header(value):
         if isinstance(fragment, bytes):
-            parts.append(fragment.decode(charset or "utf-8", errors="replace"))
+            parts.append(decode_email_bytes(fragment, charset))
         else:
             parts.append(fragment)
     return "".join(parts).strip()
@@ -138,8 +172,7 @@ def _extract_body(msg: email.message.Message) -> tuple[str, str]:
             payload = part.get_payload(decode=True)
             if payload is None:
                 continue
-            charset = part.get_content_charset() or "utf-8"
-            decoded = payload.decode(charset, errors="replace")
+            decoded = decode_email_bytes(payload, part.get_content_charset())
             if content_type == "text/plain":
                 text_parts.append(decoded)
             elif content_type == "text/html":
@@ -147,8 +180,7 @@ def _extract_body(msg: email.message.Message) -> tuple[str, str]:
     else:
         payload = msg.get_payload(decode=True)
         if payload:
-            charset = msg.get_content_charset() or "utf-8"
-            decoded = payload.decode(charset, errors="replace")
+            decoded = decode_email_bytes(payload, msg.get_content_charset())
             if msg.get_content_type() == "text/html":
                 html_parts.append(decoded)
             else:
@@ -289,29 +321,35 @@ class MailService:
         self.password = password
         self.classifier = classifier or MailClassifier()
         self._imap: imaplib.IMAP4_SSL | imaplib.IMAP4 | None = None
+        self._imap_thread_id: int | None = None
         self._current_folder = "INBOX"
         # IMAP no admite comandos concurrentes en la misma conexión.
         self._imap_lock = threading.Lock()
         self._fetch_lock = threading.Lock()
 
     def connect(self) -> None:
-        self._open_imap_session()
+        with self._imap_lock:
+            self._close_imap_unlocked()
+            self._open_imap_session()
 
     def _open_imap_session(self) -> None:
-        if self.account.use_ssl:
-            self._imap = imaplib.IMAP4_SSL(
-                self.account.imap_host,
-                self.account.imap_port,
-                timeout=IMAP_SOCKET_TIMEOUT,
-            )
-        else:
-            self._imap = imaplib.IMAP4(
-                self.account.imap_host,
-                self.account.imap_port,
-                timeout=IMAP_SOCKET_TIMEOUT,
-            )
+        self._imap = open_imap_connection(self.account)
         assert self._imap is not None
         self._imap_login(self._imap)
+        self._imap_thread_id = threading.current_thread().ident
+
+    def _close_imap_unlocked(self) -> None:
+        imap = self._imap
+        owner = self._imap_thread_id
+        self._imap = None
+        self._imap_thread_id = None
+        if imap is None:
+            return
+        if owner == threading.current_thread().ident:
+            try:
+                imap.logout()
+            except Exception:
+                pass
 
     def _imap_login(self, conn: imaplib.IMAP4_SSL | imaplib.IMAP4) -> None:
         if self.account.auth_method == AuthMethod.OAUTH2.value:
@@ -334,6 +372,9 @@ class MailService:
 
     def _ensure_connected_unlocked(self) -> None:
         folder = self._current_folder
+        tid = threading.current_thread().ident
+        if self._imap is not None and self._imap_thread_id != tid:
+            self._close_imap_unlocked()
         if self._imap is not None:
             try:
                 self._imap.noop()
@@ -341,11 +382,7 @@ class MailService:
                     self._select_on_imap(self._imap, folder)
                 return
             except Exception:
-                try:
-                    self._imap.logout()
-                except Exception:
-                    pass
-                self._imap = None
+                self._close_imap_unlocked()
         self._open_imap_session()
         if folder:
             self._select_on_imap(self._require_imap(), folder)
@@ -360,12 +397,8 @@ class MailService:
         self._current_folder = folder
 
     def disconnect(self) -> None:
-        if self._imap:
-            try:
-                self._imap.logout()
-            except Exception:
-                pass
-            self._imap = None
+        with self._imap_lock:
+            self._close_imap_unlocked()
 
     def _require_imap(self) -> imaplib.IMAP4_SSL | imaplib.IMAP4:
         if not self._imap:
@@ -374,18 +407,7 @@ class MailService:
 
     def _new_imap_connection(self) -> imaplib.IMAP4_SSL | imaplib.IMAP4:
         """Abre una conexión IMAP nueva e independiente (para leer mensajes completos)."""
-        if self.account.use_ssl:
-            conn: imaplib.IMAP4_SSL | imaplib.IMAP4 = imaplib.IMAP4_SSL(
-                self.account.imap_host,
-                self.account.imap_port,
-                timeout=IMAP_SOCKET_TIMEOUT,
-            )
-        else:
-            conn = imaplib.IMAP4(
-                self.account.imap_host,
-                self.account.imap_port,
-                timeout=IMAP_SOCKET_TIMEOUT,
-            )
+        conn = open_imap_connection(self.account)
         self._imap_login(conn)
         return conn
 
@@ -962,10 +984,12 @@ class MailService:
             msg.set_content(plain, charset="utf-8")
 
         recipients = [a.strip() for a in f"{to},{cc},{bcc}".split(",") if a.strip()]
-        context = ssl.create_default_context()
+        context = _mail_ssl_context()
 
-        # Bifurcación limpia según el tipo de puerto SMTP configurado
-        if self.account.smtp_port == 465:
+        use_smtp_ssl = self.account.smtp_port == 465 or (
+            self.account.use_ssl and not self.account.use_starttls
+        )
+        if use_smtp_ssl:
             with smtplib.SMTP_SSL(
                 self.account.smtp_host,
                 self.account.smtp_port,
@@ -1322,9 +1346,12 @@ class MailService:
 
     def test_smtp(self) -> tuple[bool, str]:
         """Comprueba login SMTP sin enviar correo."""
-        context = ssl.create_default_context()
+        context = _mail_ssl_context()
+        use_smtp_ssl = self.account.smtp_port == 465 or (
+            self.account.use_ssl and not self.account.use_starttls
+        )
         try:
-            if self.account.smtp_port == 465:
+            if use_smtp_ssl:
                 with smtplib.SMTP_SSL(
                     self.account.smtp_host,
                     self.account.smtp_port,

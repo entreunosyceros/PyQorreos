@@ -96,6 +96,7 @@ class ClassificationRules:
         }
 
     @classmethod
+    # Reconstruye las reglas de clasificación desde un diccionario guardado en disco
     def from_dict(cls, data: dict[str, Any]) -> ClassificationRules:
         return cls(
             important_senders=[s.lower() for s in data.get("important_senders", [])],
@@ -112,16 +113,19 @@ def extract_email_address(raw: str) -> str:
 
 
 def _folder_matches(name: str, keywords: tuple[str, ...]) -> bool:
+    # Verifica si el nombre de la carpeta coincide con alguna de las palabras clave
     lowered = name.lower()
     return any(kw in lowered for kw in keywords)
 
 
 def _text_contains_keyword(text: str, keywords: list[str]) -> bool:
+    # Verifica si el texto contiene alguna de las palabras clave
     lowered = text.lower()
     return any(kw in lowered for kw in keywords)
 
 
 def _is_high_priority(headers: dict[str, str]) -> bool:
+    # Verifica si la importancia del mensaje es alta
     importance = headers.get("importance", "").lower()
     if importance in ("high", "urgent"):
         return True
@@ -131,14 +135,16 @@ def _is_high_priority(headers: dict[str, str]) -> bool:
         return True
 
     ms_priority = headers.get("x-msmail-priority", "").lower()
+    # Verifica si la prioridad del mensaje es alta
     return ms_priority == "high"
 
 
 def _is_spam_header(headers: dict[str, str]) -> bool:
+    # Verifica si el mensaje es spam
     spam_status = headers.get("x-spam-status", "").lower()
     if spam_status.startswith("yes"):
         return True
-
+    # Verifica si el mensaje es spam
     spam_flag = headers.get("x-spam-flag", "").lower()
     return spam_flag in ("yes", "true")
 
@@ -149,6 +155,7 @@ class MailClassifier:
     def __init__(self, rules: ClassificationRules | None = None) -> None:
         self.rules = rules or ClassificationRules()
 
+    # Determina la categoría de un mensaje
     def classify(
         self,
         *,

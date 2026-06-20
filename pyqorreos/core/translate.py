@@ -31,18 +31,18 @@ TRANSLATION_LANGUAGES: list[tuple[str, str]] = [
 
 _DEFAULT_LANGUAGE = "es"
 
-
+# Idioma por defecto para la traducción.
 def default_target_language() -> str:
     return _DEFAULT_LANGUAGE
 
-
+# Obtiene el nombre del idioma en español.
 def language_label(code: str) -> str:
     for lang_code, label in TRANSLATION_LANGUAGES:
         if lang_code == code:
             return label
     return code
 
-
+# Normaliza el código de idioma.
 def normalize_language_code(code: str) -> str:
     code = (code or "").strip()
     if not code:
@@ -50,7 +50,7 @@ def normalize_language_code(code: str) -> str:
     valid = {c for c, _ in TRANSLATION_LANGUAGES}
     return code if code in valid else _DEFAULT_LANGUAGE
 
-
+# Obtiene el traductor.
 def _get_translator(target_lang: str):
     try:
         from deep_translator import GoogleTranslator
@@ -60,14 +60,14 @@ def _get_translator(target_lang: str):
         ) from exc
     return GoogleTranslator(source="auto", target=target_lang)
 
-
+# Traduce un trozo de texto.
 def _translate_chunk(translator, text: str) -> str:
     text = text.strip()
     if not text:
         return ""
     return translator.translate(text)
 
-
+# Divide el texto en trozos que respetan párrafos y el límite del proveedor.
 def _split_for_translation(text: str) -> list[str]:
     """Divide el texto en trozos que respetan párrafos y el límite del proveedor."""
     if len(text) <= MAX_CHUNK_CHARS:
@@ -95,7 +95,7 @@ def _split_for_translation(text: str) -> list[str]:
         chunks.append(buffer.strip())
     return chunks or [text]
 
-
+# Traduce texto plano al idioma indicado (código ISO 639-1).
 def translate_text(text: str, target_lang: str) -> str:
     """Traduce texto plano al idioma indicado (código ISO 639-1)."""
     text = normalize_translation_source(text)
@@ -109,17 +109,43 @@ def translate_text(text: str, target_lang: str) -> str:
     translated = [_translate_chunk(translator, part) for part in parts if part.strip()]
     return normalize_translation_source("\n\n".join(translated))
 
+_CSS_NOISE_RE = re.compile(
+    r"(?i)(font-size|line-height|margin|padding|color\s*:|background|"
+    r"!important|mso-|display\s*:|width\s*:|height\s*:)"
+)
+_BULLET_ONLY_RE = re.compile(r"^[\s•·\-\*\.]+$")
+_CSS_UNIT_ONLY_RE = re.compile(r"^\d+(%|px|em|pt|rem)?\s*$")
 
+
+def _is_junk_translation_line(line: str) -> bool:
+    """Detecta restos de CSS o viñetas vacías típicas de newsletters."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if _BULLET_ONLY_RE.match(stripped):
+        return True
+    if _CSS_UNIT_ONLY_RE.match(stripped):
+        return True
+    if "{" in stripped or "}" in stripped:
+        return True
+    if _CSS_NOISE_RE.search(stripped) and len(stripped) < 160:
+        return True
+    return False
+
+
+# Reduce ruido de newsletters HTML convertidas a texto (huecos y líneas vacías).
 def normalize_translation_source(text: str) -> str:
     """Reduce ruido de newsletters HTML convertidas a texto (huecos y líneas vacías)."""
-    text = (text or "").strip()
-    if not text:
+    original = (text or "").strip()
+    if not original:
         return ""
-    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[ \t]+", " ", original)
     lines = [ln.strip() for ln in text.splitlines()]
     cleaned: list[str] = []
     blank_run = 0
     for line in lines:
+        if _is_junk_translation_line(line):
+            continue
         if not line:
             blank_run += 1
             if blank_run <= 1:
@@ -127,11 +153,19 @@ def normalize_translation_source(text: str) -> str:
             continue
         blank_run = 0
         cleaned.append(line)
+    while cleaned and not cleaned[0].strip():
+        cleaned.pop(0)
     text = "\n".join(cleaned).strip()
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return text
+    if text:
+        return text
+    non_empty = [ln for ln in lines if ln]
+    if non_empty and all(_is_junk_translation_line(ln) for ln in non_empty):
+        return ""
+    fallback = re.sub(r"[ \t]+", " ", original)
+    return re.sub(r"\n{3,}", "\n\n", fallback).strip()
 
-
+# Convierte la traducción en HTML legible para el visor WebEngine.
 def translated_text_to_html(text: str, language_label: str = "") -> str:
     """Convierte la traducción en HTML legible para el visor WebEngine."""
     from html import escape
@@ -162,6 +196,7 @@ def translated_text_to_html(text: str, language_label: str = "") -> str:
         f"Traducción {label} — el diseño original no se conserva."
         f"</p>"
     )
+    # Construye el HTML de la traducción.
     html = (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         "<style>.pyq-translation-banner {"

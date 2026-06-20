@@ -36,32 +36,39 @@ def friendly_mail_error(exc: BaseException) -> str:
             return "El servidor IMAP no respondió a tiempo. Comprueba tu conexión."
         return raw or "Error del servidor IMAP."
 
+    # Error de autenticación SMTP.
     if isinstance(exc, smtplib.SMTPAuthenticationError):
         return (
             "No se pudo autenticar en SMTP. "
             "Revisa usuario, contraseña y el puerto de envío (465 SSL o 587 STARTTLS)."
         )
 
+    # Error de excepción SMTP.
     if isinstance(exc, smtplib.SMTPException):
         if "data" in lowered and ("size" in lowered or "limit" in lowered):
             return "El servidor rechazó el mensaje: demasiado grande (adjuntos o cuerpo)."
         return raw or "Error del servidor SMTP."
 
+    # Error de tiempo de espera.
     if isinstance(exc, (socket.timeout, TimeoutError)):
         return "Tiempo de espera agotado. La red puede ser lenta o el servidor no responde."
 
+    # Error de certificado SSL/TLS.
     if isinstance(exc, ssl.SSLError):
         return (
             "Error de certificado o cifrado SSL/TLS. "
             "Comprueba host, puerto y si la cuenta usa SSL."
         )
 
+    # Error de conexión rechazada.
     if isinstance(exc, ConnectionRefusedError):
         return "Conexión rechazada. Revisa host y puerto del servidor."
 
+    # Error de conexión reseteada.
     if isinstance(exc, ConnectionResetError):
         return "El servidor cerró la conexión de forma inesperada. Vuelve a intentarlo."
 
+    # Error de sistema operativo.
     if isinstance(exc, OSError):
         if "network is unreachable" in lowered:
             return "Sin conexión de red. Comprueba tu Internet."

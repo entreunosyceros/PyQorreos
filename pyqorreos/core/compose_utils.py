@@ -26,7 +26,7 @@ def body_mentions_attachment(text: str) -> bool:
     """Detecta si el cuerpo sugiere que hay un archivo adjunto."""
     return bool(_ATTACHMENT_HINT.search(text or ""))
 
-
+# Obtiene el tamaño de un archivo en bytes
 def attachment_size_bytes(path: str | Path) -> int:
     try:
         return Path(path).stat().st_size

@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QThread, QTimer
+from PySide6.QtCore import QEvent, Qt, QSignalBlocker, QThread, QTimer
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -181,7 +181,6 @@ class MainWindow(QMainWindow):
         self._translation_cache: dict[tuple[str, str], dict[str, str]] = {}
         self._original_subject = ""
         self._sync_new_total = 0
-        self._account_combo_blocked = False
         self._prefs: UserPreferences = load_preferences()
         self._folder_names: list[str] = []
         self._folder_unread: dict[str, int] = {}
@@ -190,6 +189,7 @@ class MainWindow(QMainWindow):
         self._background_sync.signals.folder_updated.connect(self._on_background_folder_updated)
 
         self._load_folder_worker: LoadFolderWorker | None = None
+        self._load_folder_generation = 0
         self._connect_worker: ConnectWorker | None = None
         self._connect_generation = 0
         self._folder_unread_worker: FolderUnreadWorker | None = None
@@ -331,6 +331,10 @@ class MainWindow(QMainWindow):
         self.btn_manage_accounts = QPushButton("Gestionar…")
         self.btn_manage_accounts.clicked.connect(self._manage_accounts)
         account_row.addWidget(self.btn_manage_accounts)
+        self.btn_edit_account = QPushButton("Editar…")
+        self.btn_edit_account.setToolTip("Editar la cuenta seleccionada")
+        self.btn_edit_account.clicked.connect(self._edit_current_account)
+        account_row.addWidget(self.btn_edit_account)
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Asunto o remitente…")
@@ -498,6 +502,9 @@ class MainWindow(QMainWindow):
             self._load_remote_images_for_current
         )
         self.message_viewer.translate_requested.connect(self._on_translate_requested)
+        self.message_viewer.restore_original_requested.connect(
+            self._restore_original_message_view
+        )
         self.message_viewer.link_hover_changed.connect(self._on_viewer_link_hover)
         reader_layout.addWidget(self.message_viewer, 1)
 
@@ -573,6 +580,7 @@ class MainWindow(QMainWindow):
         self.btn_new_folder.setText("＋" if narrow else "＋ Carpeta")
         self.btn_new_subfolder.setText("＋ Sub" if narrow else "＋ Subcarpeta")
         self.btn_manage_accounts.setText("…" if narrow else "Gestionar…")
+        self.btn_edit_account.setText("✎" if narrow else "Editar…")
         self.btn_delete_selected.setText("🗑" if narrow else "🗑 Eliminar")
         self.btn_move_selected.setText("📁" if narrow else "📁 Mover a…")
         self.btn_prev_page.setText("◀" if narrow else "◀ Anterior")
@@ -729,6 +737,10 @@ class MainWindow(QMainWindow):
         self._act_add_account = QAction("Añadir cuenta…", self)
         self._setup_menu_action(self._act_add_account, "user-plus", "Añadir cuenta…")
         self._act_add_account.triggered.connect(self._add_account)
+
+        self._act_edit_account = QAction("Editar cuenta…", self)
+        self._setup_menu_action(self._act_edit_account, "account", "Editar cuenta…")
+        self._act_edit_account.triggered.connect(self._edit_current_account)
 
         self._act_manage_accounts = QAction("Cuentas", self)
         self._setup_menu_action(
@@ -946,30 +958,52 @@ class MainWindow(QMainWindow):
         height = max(self.reader_actions.sizeHint().height(), 96)
         self.reader_actions.setFixedHeight(height)
 
+    @staticmethod
+    def _safe_worker_running(worker: QThread | None) -> bool:
+        if worker is None:
+            return False
+        try:
+            return worker.isRunning()
+        except RuntimeError:
+            return False
+
+    def _abort_viewer_workers(self, *, invalidate_translate: bool = True) -> None:
+        """Invalida y desconecta traducción / imágenes remotas al cambiar de mensaje."""
+        self._enhance_generation += 1
+        self._detach_enhance_worker()
+        self._explicit_image_load = False
+        if invalidate_translate:
+            self._translate_generation += 1
+            self._detach_translate_worker()
+
     def _detach_translate_worker(self) -> None:
         self._pending_translate_uid = None
-        if not self._translate_worker:
+        worker = self._translate_worker
+        self._translate_worker = None
+        if worker is None:
             return
         try:
-            self._translate_worker.signals.finished.disconnect(self._on_message_translated)
+            worker.signals.finished.disconnect(self._on_message_translated)
         except (RuntimeError, TypeError):
             pass
         try:
-            self._translate_worker.signals.error.disconnect(self._on_translate_error)
+            worker.signals.error.disconnect(self._on_translate_error)
         except (RuntimeError, TypeError):
             pass
 
     def _detach_enhance_worker(self) -> None:
         """Ignora el resultado de una mejora HTML en curso (p. ej. al cambiar de mensaje)."""
         self._pending_enhance_uid = None
-        if not self._enhance_worker:
+        worker = self._enhance_worker
+        self._enhance_worker = None
+        if worker is None:
             return
         try:
-            self._enhance_worker.signals.finished.disconnect(self._on_html_enhanced)
+            worker.signals.finished.disconnect(self._on_html_enhanced)
         except (RuntimeError, TypeError):
             pass
         try:
-            self._enhance_worker.signals.error.disconnect(self._on_enhance_error)
+            worker.signals.error.disconnect(self._on_enhance_error)
         except (RuntimeError, TypeError):
             pass
 
@@ -1009,7 +1043,9 @@ class MainWindow(QMainWindow):
             self.meta_label.setText("")
 
         if self._current_message and self._current_message.uid != uid:
+            self._abort_viewer_workers()
             self._current_message = None
+            self.message_viewer.prepare_for_new_message()
 
         self.message_viewer.show_plain("Doble clic en el mensaje para abrirlo.")
         self.attachment_panel.clear()
@@ -1225,6 +1261,7 @@ class MainWindow(QMainWindow):
 
         cuenta_menu = menu.addMenu(action_icon("account"), "Cuenta")
         cuenta_menu.addAction(self._act_add_account)
+        cuenta_menu.addAction(self._act_edit_account)
         cuenta_menu.addAction(self._act_manage_accounts)
         cuenta_menu.addSeparator()
         cuenta_menu.addAction(self._act_refresh)
@@ -1249,6 +1286,7 @@ class MainWindow(QMainWindow):
             self._act_show,
             self._act_tray_inbox,
             self._act_add_account,
+            self._act_edit_account,
             self._act_manage_accounts,
             self._act_refresh,
             self._act_compose,
@@ -1415,8 +1453,9 @@ class MainWindow(QMainWindow):
         self._folder_unread_timer.stop()
         self._background_sync.stop(wait_ms=0 if fast else 5000)
 
+        self._stop_load_folder_worker(wait_ms=wait_ms)
+
         for attr in (
-            "_load_folder_worker",
             "_connect_worker",
             "_message_fetch_worker",
             "_enhance_worker",
@@ -1496,6 +1535,7 @@ class MainWindow(QMainWindow):
 
         cuenta_menu = self.menuBar().addMenu("Cuenta")
         cuenta_menu.addAction(self._act_add_account)
+        cuenta_menu.addAction(self._act_edit_account)
         cuenta_menu.addAction(self._act_manage_accounts)
         cuenta_menu.addSeparator()
         cuenta_menu.addAction(self._act_refresh)
@@ -1597,38 +1637,50 @@ class MainWindow(QMainWindow):
             "<p>Ve a <b>Cuenta → Gestionar cuentas</b> o usa el botón <b>Gestionar…</b>.</p>"
         )
 
+    def _update_accounts_registry(self) -> None:
+        """Propaga la lista de cuentas a la sincronización en segundo plano."""
+        self._background_sync.set_accounts(
+            self.accounts,
+            self.current_account.id if self.current_account else None,
+        )
+
     def _refresh_account_combo(self, select_id: str | None = None) -> None:
         """Actualiza el selector de cuentas."""
-        self._account_combo_blocked = True
-        self.account_combo.clear()
-        if not self.accounts:
-            self.account_combo.addItem("Sin cuentas configuradas")
-            self.account_combo.setEnabled(False)
-            self.btn_manage_accounts.setText("Añadir cuenta…")
-        else:
-            self.account_combo.setEnabled(True)
-            self.btn_manage_accounts.setText("Gestionar…")
-            for account in self.accounts:
-                name = account.display_name or account.email.split("@", 1)[0]
-                self.account_combo.addItem(f"{name} ({account.email})", account.id)
-            target_id = select_id or (
-                self.current_account.id if self.current_account else None
-            )
-            if target_id:
-                idx = self.account_combo.findData(target_id)
-                if idx >= 0:
-                    self.account_combo.setCurrentIndex(idx)
-        self._account_combo_blocked = False
+        with QSignalBlocker(self.account_combo):
+            self.account_combo.clear()
+            if not self.accounts:
+                self.account_combo.addItem("Sin cuentas configuradas")
+                self.account_combo.setEnabled(False)
+                self.btn_manage_accounts.setText("Añadir cuenta…")
+                self.btn_edit_account.setEnabled(False)
+            else:
+                self.account_combo.setEnabled(True)
+                self.btn_manage_accounts.setText("Gestionar…")
+                self.btn_edit_account.setEnabled(True)
+                for account in self.accounts:
+                    name = account.display_name or account.email.split("@", 1)[0]
+                    self.account_combo.addItem(f"{name} ({account.email})", account.id)
+                target_id = select_id or (
+                    self.current_account.id if self.current_account else None
+                )
+                if target_id:
+                    idx = self.account_combo.findData(target_id, Qt.ItemDataRole.UserRole)
+                    if idx >= 0:
+                        self.account_combo.setCurrentIndex(idx)
 
     def _on_account_combo_changed(self, index: int) -> None:
-        if self._account_combo_blocked or index < 0 or not self.accounts:
+        if index < 0 or not self.accounts:
             return
-        account_id = self.account_combo.itemData(index)
+        account_id = self.account_combo.itemData(index, Qt.ItemDataRole.UserRole)
         if not account_id:
             return
-        if self.current_account and self.current_account.id == account_id:
+        account_id = str(account_id)
+        if self.current_account and str(self.current_account.id) == account_id:
             return
-        account = next((a for a in self.accounts if a.id == account_id), None)
+        account = next(
+            (a for a in self.accounts if str(a.id) == account_id),
+            None,
+        )
         if account:
             self._connect_account(account)
 
@@ -1657,7 +1709,7 @@ class MainWindow(QMainWindow):
         else:
             self.accounts.append(account)
         self.settings.save_accounts(self.accounts)
-        self._refresh_account_combo(account.id)
+        self._update_accounts_registry()
         return True
 
     def _add_account(self) -> None:
@@ -1673,6 +1725,35 @@ class MainWindow(QMainWindow):
             return
         self._connect_account(account)
 
+    def _edit_current_account(self) -> None:
+        """Abre el diálogo de edición para la cuenta del selector."""
+        if not self.accounts:
+            QMessageBox.information(
+                self,
+                "Sin cuentas",
+                "No hay cuentas configuradas. Usa «Añadir cuenta…» primero.",
+            )
+            return
+        account_id = self.account_combo.currentData()
+        account = next((a for a in self.accounts if a.id == account_id), None)
+        if account is None:
+            account = self.current_account or self.accounts[0]
+        dialog = AccountDialog(
+            self.settings,
+            account=account,
+            parent=self,
+            on_configure_oauth=lambda: self._show_preferences(initial_tab="oauth"),
+        )
+        if self._exec_modal(dialog) != AccountDialog.DialogCode.Accepted:
+            return
+        updated, password = dialog.get_result()
+        if not self._save_account(updated, password):
+            return
+        if self.current_account and self.current_account.id == updated.id:
+            self._connect_account(updated)
+        else:
+            self._refresh_account_combo(updated.id)
+
     def _manage_accounts(self) -> None:
         if not self.accounts:
             self._add_account()
@@ -1687,6 +1768,7 @@ class MainWindow(QMainWindow):
         )
         if self._exec_modal(dialog) != QDialog.DialogCode.Accepted:
             self.accounts = self.settings.load_accounts()
+            self._update_accounts_registry()
             if self.current_account and self.current_account.id not in {
                 a.id for a in self.accounts
             }:
@@ -1700,10 +1782,22 @@ class MainWindow(QMainWindow):
                 self.message_table.setRowCount(0)
                 self._set_message_actions_enabled(False)
                 self._show_welcome()
-            self._refresh_account_combo()
+            else:
+                active_id = self.current_account.id if self.current_account else None
+                self._refresh_account_combo(active_id)
+                if active_id:
+                    account = next(
+                        (a for a in self.accounts if a.id == active_id),
+                        None,
+                    )
+                    if account:
+                        self._connect_account(account)
+            if self._prefs.background_sync_enabled and self.accounts:
+                self._background_sync.start()
             return
 
         self.accounts = dialog.get_accounts()
+        self._update_accounts_registry()
         if dialog.selected_account_id:
             account = next(
                 (a for a in self.accounts if a.id == dialog.selected_account_id),
@@ -1714,7 +1808,18 @@ class MainWindow(QMainWindow):
         else:
             self._refresh_account_combo()
 
-    def _connect_account(self, account: MailAccount, *, block_ui: bool = True) -> None:
+    def _stop_connect_worker(self) -> None:
+        worker = self._connect_worker
+        if worker is None:
+            return
+        if hasattr(worker, "cancel"):
+            worker.cancel()
+        if worker.isRunning():
+            self._disconnect_thread_signals(worker)
+            self._stop_thread(worker, wait_ms=1500)
+        self._connect_worker = None
+
+    def _connect_account(self, account: MailAccount, *, block_ui: bool = False) -> None:
         """Inicia la conexión IMAP en segundo plano para la cuenta indicada."""
         auth_secret = self.settings.get_auth_secret(account)
         if not auth_secret:
@@ -1733,6 +1838,7 @@ class MainWindow(QMainWindow):
             return
 
         self._cancel_sync()
+        self._stop_connect_worker()
         if self.mail_service:
             self.mail_service.disconnect()
             self.mail_service = None
@@ -1742,7 +1848,9 @@ class MainWindow(QMainWindow):
 
         self.current_account = account
         self.settings.set_last_account_id(account.id)
+        self._update_accounts_registry()
         self._refresh_account_combo(account.id)
+        self._preload_cached_folder(account.id, "INBOX")
         self.status_bar.showMessage(f"Conectando a {account.email}…")
         if block_ui:
             self.setEnabled(False)
@@ -1751,7 +1859,7 @@ class MainWindow(QMainWindow):
             account, auth_secret, self.settings.get_classifier()
         )
         worker.signals.finished.connect(
-            lambda result, g=connect_gen: self._on_connected(result, g)
+            lambda folder_names, g=connect_gen: self._on_connected(folder_names, g)
         )
         worker.signals.error.connect(
             lambda message, g=connect_gen: self._on_connect_error(message, g)
@@ -1760,24 +1868,60 @@ class MainWindow(QMainWindow):
         self._connect_worker = worker
         self._track_worker(worker)
 
-    def _on_connected(self, result, generation: int | None = None) -> None:
-        service, folders = result
-        if generation is not None and generation != self._connect_generation:
-            service.disconnect()
-            return
-        self.setEnabled(True)
-        self.mail_service = service
-        self._folder_names = [f.name for f in folders]
-        self._refresh_folder_tree(select_folder="INBOX")
-        self._refresh_folder_unread_counts()
-        self._refresh_storage_quota()
+    def _on_connected(self, folder_names, generation: int | None = None) -> None:
+        stale = generation is not None and generation != self._connect_generation
+        try:
+            if stale or not self.current_account:
+                return
+            auth_secret = self.settings.get_auth_secret(self.current_account)
+            if not auth_secret:
+                raise RuntimeError("No hay credenciales guardadas para esta cuenta.")
+            self.mail_service = MailService(
+                self.current_account,
+                auth_secret,
+                self.settings.get_classifier(),
+            )
+            self.mail_service.connect()
+            self._folder_names = list(folder_names) if folder_names else ["INBOX"]
+            self._refresh_folder_tree(select_folder="INBOX")
+            self._refresh_folder_unread_counts()
+            self._refresh_storage_quota()
 
-        folder = selected_folder_path(self.folder_tree) or self._current_folder or "INBOX"
-        self._start_folder_sync(folder)
-        self._background_sync.set_accounts(
-            self.accounts, self.current_account.id if self.current_account else None
-        )
-        self._background_sync.start()
+            folder = selected_folder_path(self.folder_tree) or self._current_folder or "INBOX"
+            self._start_folder_sync(folder)
+            self._background_sync.set_accounts(
+                self.accounts, self.current_account.id if self.current_account else None
+            )
+            self._background_sync.start()
+            self.status_bar.showMessage(f"Conectado a {self.current_account.email}")
+        except Exception as exc:
+            from pyqorreos.core.network_errors import friendly_mail_error
+
+            if self.mail_service:
+                try:
+                    self.mail_service.disconnect()
+                except Exception:
+                    pass
+                self.mail_service = None
+            self.status_bar.showMessage("Error de conexión")
+            QMessageBox.critical(
+                self,
+                "Error de conexión",
+                f"No se pudo conectar:\n\n{friendly_mail_error(exc)}",
+            )
+        finally:
+            self.setEnabled(True)
+            self._connect_worker = None
+
+    def _stop_load_folder_worker(self, *, wait_ms: int = 500) -> None:
+        """Detiene la carga de caché local sin tocar objetos Qt ya liberados."""
+        self._load_folder_generation += 1
+        worker = self._load_folder_worker
+        self._load_folder_worker = None
+        if worker is None:
+            return
+        self._disconnect_thread_signals(worker)
+        self._stop_thread(worker, wait_ms=wait_ms)
 
     def _preload_cached_folder(self, account_id: str, folder: str) -> None:
         """Muestra mensajes en caché antes de que termine la conexión IMAP."""
@@ -1790,17 +1934,29 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(
                 f"Cargando {count:,} mensajes en caché…".replace(",", ".")
             )
-        if self._load_folder_worker and self._load_folder_worker.isRunning():
-            self._load_folder_worker.wait(2000)
+        self._stop_load_folder_worker()
+        generation = self._load_folder_generation
         worker = LoadFolderWorker(self.mail_cache, account_id, folder)
         self._load_folder_worker = worker
-        worker.signals.finished.connect(self._on_startup_cache_preloaded)
+        worker.signals.finished.connect(
+            lambda summaries, g=generation, aid=account_id: self._on_startup_cache_preloaded(
+                summaries, g, aid
+            )
+        )
         worker.signals.error.connect(lambda _msg: None)
-        worker.finished.connect(worker.deleteLater)
         worker.start()
 
-    def _on_startup_cache_preloaded(self, summaries: list[MailSummary]) -> None:
-        if not self.current_account or not summaries:
+    def _on_startup_cache_preloaded(
+        self,
+        summaries: list[MailSummary],
+        generation: int,
+        account_id: str,
+    ) -> None:
+        if generation != self._load_folder_generation:
+            return
+        if not self.current_account or str(self.current_account.id) != str(account_id):
+            return
+        if not summaries:
             return
         self._all_messages = summaries
         self._render_message_table()
@@ -2027,9 +2183,7 @@ class MainWindow(QMainWindow):
         same_folder = manual_refresh and folder == self._current_folder
 
         self._cancel_sync()
-        if self._load_folder_worker and self._load_folder_worker.isRunning():
-            self._load_folder_worker.wait(2000)
-        self._load_folder_worker = None
+        self._stop_load_folder_worker()
         generation = self._sync_generation
         self._manual_refresh_active = same_folder
         self._current_folder = folder
@@ -2068,6 +2222,7 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(f"Sincronizando {folder}…")
 
         if not same_folder or not self._all_messages:
+            load_generation = self._load_folder_generation
             load_worker = LoadFolderWorker(
                 self.mail_cache,
                 self.current_account.id,
@@ -2075,8 +2230,8 @@ class MainWindow(QMainWindow):
             )
             self._load_folder_worker = load_worker
             load_worker.signals.finished.connect(
-                lambda summaries, g=generation, f=folder: self._on_folder_cache_loaded(
-                    summaries, g, f
+                lambda summaries, g=generation, lg=load_generation, f=folder: self._on_folder_cache_loaded(
+                    summaries, g, f, lg
                 )
             )
             load_worker.signals.error.connect(
@@ -2085,7 +2240,6 @@ class MainWindow(QMainWindow):
                 )
             )
             load_worker.start()
-            self._track_worker(load_worker)
 
         self.sync_progress.setVisible(True)
         self.sync_progress.setValue(0)
@@ -2124,11 +2278,7 @@ class MainWindow(QMainWindow):
         self._fetch_generation += 1
         self._pending_fetch_uid = None
         self._message_fetch_worker = None
-        self._enhance_generation += 1
-        self._detach_enhance_worker()
-        self._explicit_image_load = False
-        self._translate_generation += 1
-        self._detach_translate_worker()
+        self._abort_viewer_workers()
 
     def _cancel_sync(self) -> None:
         self._sync_generation += 1
@@ -2143,8 +2293,14 @@ class MainWindow(QMainWindow):
         return generation == self._sync_generation and folder == self._current_folder
 
     def _on_folder_cache_loaded(
-        self, summaries: list[MailSummary], generation: int, folder: str
+        self,
+        summaries: list[MailSummary],
+        generation: int,
+        folder: str,
+        load_generation: int,
     ) -> None:
+        if load_generation != self._load_folder_generation:
+            return
         if not self._sync_is_current(generation, folder):
             return
         self._all_messages = summaries
@@ -2252,15 +2408,18 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Error de sincronización", message)
 
     def _on_connect_error(self, message: str, generation: int | None = None) -> None:
-        if generation is not None and generation != self._connect_generation:
-            return
-        self.setEnabled(True)
-        self.status_bar.showMessage("Error de conexión")
-        QMessageBox.critical(
-            self,
-            "Error de conexión",
-            f"No se pudo conectar:\n\n{message}",
-        )
+        try:
+            if generation is not None and generation != self._connect_generation:
+                return
+            self.status_bar.showMessage("Error de conexión")
+            QMessageBox.critical(
+                self,
+                "Error de conexión",
+                f"No se pudo conectar:\n\n{message}",
+            )
+        finally:
+            self.setEnabled(True)
+            self._connect_worker = None
 
     def _on_folder_tree_changed(self, current, _previous) -> None:
         if not current or not self.mail_service:
@@ -2703,11 +2862,8 @@ class MainWindow(QMainWindow):
         if message.uid not in getattr(self, "_message_uids", []):
             return
 
-        self._enhance_generation += 1
-        self._detach_enhance_worker()
-        self._explicit_image_load = False
-        self._translate_generation += 1
-        self._detach_translate_worker()
+        self._abort_viewer_workers()
+        self.message_viewer.prepare_for_new_message()
 
         self._pending_fetch_uid = None
         self._current_message = message
@@ -2788,8 +2944,7 @@ class MainWindow(QMainWindow):
         if self._prefs.block_remote_images:
             return
         if (
-            self._enhance_worker
-            and self._enhance_worker.isRunning()
+            self._safe_worker_running(self._enhance_worker)
             and self._pending_enhance_uid == message.uid
         ):
             return
@@ -2814,8 +2969,7 @@ class MainWindow(QMainWindow):
             return
         uid = self._current_message.uid
         if (
-            self._enhance_worker
-            and self._enhance_worker.isRunning()
+            self._safe_worker_running(self._enhance_worker)
             and self._pending_enhance_uid == uid
         ):
             self.status_bar.showMessage("Cargando imágenes remotas…")
@@ -2845,6 +2999,7 @@ class MainWindow(QMainWindow):
         if generation is not None and generation != self._enhance_generation:
             return
         self._pending_enhance_uid = None
+        self._enhance_worker = None
         self._explicit_image_load = False
         self.status_bar.showMessage("No se pudieron cargar las imágenes remotas")
         QMessageBox.warning(self, "Imágenes remotas", message)
@@ -2853,10 +3008,19 @@ class MainWindow(QMainWindow):
         from pyqorreos.core.email_html import html_to_plain_text
         from pyqorreos.core.translate import normalize_translation_source
 
-        plain = (message.body_text or "").strip()
-        if plain in ("", "(Sin contenido)", "(Mensaje vacío)"):
-            plain = html_to_plain_text(message.body_html)
-        return normalize_translation_source(plain)
+        text_part = (message.body_text or "").strip()
+        if text_part in ("", "(Sin contenido)", "(Mensaje vacío)"):
+            text_part = ""
+        html_part = html_to_plain_text(message.body_html) if message.body_html else ""
+
+        text_norm = normalize_translation_source(text_part) if text_part else ""
+        html_norm = normalize_translation_source(html_part) if html_part else ""
+
+        if text_norm and html_norm:
+            if len(html_norm) > len(text_norm) * 1.15:
+                return html_norm
+            return text_norm
+        return text_norm or html_norm
 
     def _update_translate_button(self) -> None:
         if not self._current_message:
@@ -2866,10 +3030,12 @@ class MainWindow(QMainWindow):
         self.message_viewer.set_translate_available(bool(body))
 
     def _on_translate_requested(self) -> None:
-        if self.message_viewer.is_showing_translation():
-            self._restore_original_message_view()
-            return
         if not self._current_message:
+            self.status_bar.showMessage("Abre un mensaje antes de traducirlo")
+            return
+        selected_uid = self._selected_message_uid()
+        if selected_uid and selected_uid != self._current_message.uid:
+            self.status_bar.showMessage("Abre el mensaje seleccionado con doble clic")
             return
         body = self._message_body_for_translation(self._current_message)
         if not body:
@@ -2884,8 +3050,7 @@ class MainWindow(QMainWindow):
             return
 
         if (
-            self._translate_worker
-            and self._translate_worker.isRunning()
+            self._safe_worker_running(self._translate_worker)
             and self._pending_translate_uid == uid
         ):
             self.status_bar.showMessage(
@@ -2939,6 +3104,7 @@ class MainWindow(QMainWindow):
         if not self._current_message or self._current_message.uid != uid:
             return
         self._pending_translate_uid = None
+        self._translate_worker = None
         self._translation_cache[(uid, target_lang)] = {
             "body": body,
             "subject": subject,
@@ -2951,6 +3117,7 @@ class MainWindow(QMainWindow):
         if generation is not None and generation != self._translate_generation:
             return
         self._pending_translate_uid = None
+        self._translate_worker = None
         self.status_bar.showMessage("No se pudo traducir el mensaje")
         QMessageBox.warning(self, "Traducción", message)
 
@@ -3139,6 +3306,7 @@ class MainWindow(QMainWindow):
         if not self._current_message or self._current_message.uid != uid:
             return
         self._pending_enhance_uid = None
+        self._enhance_worker = None
         explicit = self._explicit_image_load
         self._explicit_image_load = False
         from pyqorreos.core.email_html import (
@@ -3164,6 +3332,11 @@ class MainWindow(QMainWindow):
 
         if explicit and not improved:
             if new_blocked > 0:
+                self.message_viewer.show_html(
+                    html,
+                    base_url_for_message(self._current_message.sender),
+                    remote_blocked=True,
+                )
                 self.status_bar.showMessage(
                     "No se pudieron descargar algunas imágenes remotas"
                 )

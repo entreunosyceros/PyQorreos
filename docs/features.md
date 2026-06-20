@@ -10,14 +10,16 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 
 ## Cuentas y conexión
 
-- Varias cuentas de correo (Gmail, Outlook, Yahoo o servidor personalizado)
-- Selector rápido de cuenta activa y gestor de cuentas (añadir, editar, eliminar)
-- Conexión IMAP/SMTP con contraseñas en el llavero del sistema (`keyring`)
+- Varias cuentas de correo (Gmail, Outlook, Yahoo, **hosting / cPanel** o servidor personalizado)
+- Selector rápido de cuenta activa y gestor de cuentas (**añadir, editar, eliminar**)
+- Conexión IMAP/SMTP con **SSL/TLS** o **STARTTLS** configurable por cuenta (puertos 993/143, 465/587)
+- Preset **Hosting / cPanel (Webempresa, etc.)** para correo en dominio propio (`mail.tudominio.com`)
+- Contraseñas en el llavero del sistema (`keyring`); opción **mostrar contraseña** al configurar la cuenta
 - **Aviso para Gmail** al configurar la cuenta: enlace a contraseña de aplicación (no la contraseña de la cuenta Google)
 - Firma de correo configurable por cuenta
 - OAuth2 integrado para **Gmail** y **Outlook** (inicio de sesión en navegador + renovación automática de tokens)
 - Alternativa: contraseña de aplicación (Gmail) o contraseña habitual según el proveedor
-- Bandeja del sistema: la app sigue activa al cerrar la ventana
+- Bandeja del sistema: la app sigue activa al cerrar la ventana; **Archivo → Salir** cierra por completo
 
 ## Bandeja y sincronización
 
@@ -42,8 +44,10 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Visor HTML con Qt WebEngine (maquetado fiel al correo original)
 - Modos de vista: HTML original, modo lectura y texto plano
 - Imágenes embebidas (cid); imágenes remotas bloqueables por privacidad
-- Botón «Mostrar imágenes remotas» bajo demanda (descarga en segundo plano)
-- **Traducción** bajo demanda al idioma configurado en Preferencias (botón «Traducir» / «Ver original»); enlaces clicables y menú «Abrir en el navegador»
+- Botón **«Mostrar imágenes remotas»** bajo demanda (descarga en segundo plano, incluso si el HTML en caché estaba bloqueado)
+- **Traducción** bajo demanda al idioma configurado en Preferencias (botón «Traducir» / «Ver original»); caché por mensaje; enlaces clicables y menú «Abrir en el navegador»
+- Extracción de texto para traducir desde HTML o texto plano, filtrando ruido típico de newsletters (CSS suelto, viñetas vacías)
+- Decodificación de charsets MIME habituales en hosting (`unknown-8bit`, `x-unknown`, etc.)
 - Advertencia anti-phishing al pasar el ratón sobre enlaces sospechosos; la URL se muestra en la barra de estado
 - List-Unsubscribe: botón y menú contextual para darse de baja de listas de correo
 - Adjuntos: listar, abrir y guardar desde el panel del lector
@@ -82,12 +86,14 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Operaciones de red en hilos secundarios (la interfaz no se bloquea)
 - Caché SQLite en modo WAL; búsqueda en base de datos con debounce
 - Conexión IMAP dedicada por mensaje y reintentos ante errores de protocolo
+- Reconexión IMAP segura al usar varias cuentas o hilos de lectura en paralelo
 - Cabeceras limitadas en carpetas muy grandes (>5000 mensajes) en la primera sync
 - Timeouts IMAP/SMTP y mensajes de error claros — ver [Pilares de calidad](quality-pillars.md)
 
 ## Apariencia
 
 - **Tema claro u oscuro** (Archivo → Preferencias → Apariencia)
+- Ventana principal maximizada en el **monitor principal** al arrancar
 - Estilos unificados en tablas, botones, menús y diálogos (`pyqorreos/ui/theme.py`)
 
 ---

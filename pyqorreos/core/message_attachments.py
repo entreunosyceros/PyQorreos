@@ -9,6 +9,8 @@ import email.message
 from dataclasses import dataclass
 from email.header import decode_header
 
+from pyqorreos.core.email_charset import decode_email_bytes
+
 
 @dataclass
 class MailAttachmentInfo:
@@ -44,7 +46,7 @@ def _decode_filename(raw: str | None) -> str:
     parts: list[str] = []
     for fragment, charset in decode_header(raw):
         if isinstance(fragment, bytes):
-            parts.append(fragment.decode(charset or "utf-8", errors="replace"))
+            parts.append(decode_email_bytes(fragment, charset))
         else:
             parts.append(fragment)
     return "".join(parts).strip() or "adjunto"

@@ -34,7 +34,7 @@ class SyncSignals(QObject):
 
 
 class ConnectWorker(QThread):
-    """Conecta al servidor IMAP y obtiene la lista de carpetas."""
+    """Comprueba IMAP y devuelve la lista de carpetas (sin dejar la sesión abierta)."""
 
     def __init__(
         self,
@@ -47,15 +47,27 @@ class ConnectWorker(QThread):
         self.password = password
         self.classifier = classifier
         self.signals = WorkerSignals()
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
 
     def run(self) -> None:
         service = MailService(self.account, self.password, self.classifier)
         try:
+            if self._cancelled:
+                return
             service.connect()
+            if self._cancelled:
+                return
             folders = service.list_folders()
-            self.signals.finished.emit((service, folders))
+            names = [f.name for f in folders]
+            self.signals.finished.emit(names)
         except Exception as exc:
-            self.signals.error.emit(friendly_mail_error(exc))
+            if not self._cancelled:
+                self.signals.error.emit(friendly_mail_error(exc))
+        finally:
+            service.disconnect()
 
 
 class LoadFolderWorker(QThread):

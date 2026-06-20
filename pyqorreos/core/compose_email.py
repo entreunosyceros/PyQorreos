@@ -23,11 +23,11 @@ class EmailAttachment:
         p = Path(path)
         return cls(path=str(p), filename=p.name)
 
-
+# Expresiones regulares para encontrar URLs de imágenes y archivos
 _IMG_SRC = re.compile(r"""src=["']([^"']+)["']""", re.IGNORECASE)
 _FILE_URL = re.compile(r"^file://+", re.IGNORECASE)
 
-
+# Convierte una URL de imagen en un objeto Path
 def _path_from_src(src: str) -> Path | None:
     src = src.strip()
     if not src or src.startswith("data:"):
@@ -61,6 +61,7 @@ def embed_local_images_in_html(html: str) -> str:
     return _IMG_SRC.sub(replacer, html)
 
 
+# Prepara el HTML generado por QTextEdit para envío por correo
 def prepare_outgoing_html(qt_html: str) -> str:
     """Prepara el HTML generado por QTextEdit para envío por correo."""
     html = qt_html.strip()
@@ -74,7 +75,7 @@ def prepare_outgoing_html(qt_html: str) -> str:
         )
     return html
 
-
+# Construye un mensaje RFC822 para guardar como borrador IMAP
 def build_draft_bytes(
     *,
     from_email: str,
@@ -104,8 +105,10 @@ def build_draft_bytes(
     html = (body_html or "").strip()
     plain = body_plain or ""
     if html:
+        # Si hay HTML, añade el contenido plano y el HTML
         msg.set_content(plain, subtype="plain", charset="utf-8")
         msg.add_alternative(html, subtype="html", charset="utf-8")
     else:
+        # Si no hay HTML, añade el contenido plano
         msg.set_content(plain, charset="utf-8")
     return msg.as_bytes()

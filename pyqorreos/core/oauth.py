@@ -33,10 +33,12 @@ from pyqorreos.core.settings import SERVICE_NAME
 
 
 class AuthMethod(str, Enum):
+    # Método de autenticación por contraseña
     PASSWORD = "password"
+    # Método de autenticación por OAuth2
     OAUTH2 = "oauth2"
 
-
+# Error de configuración o autorización OAuth
 class OAuthError(Exception):
     """Error de configuración o autorización OAuth."""
 
@@ -48,7 +50,7 @@ class OAuthProvider:
     token_url: str
     scopes: tuple[str, ...]
 
-
+# Proveedores de OAuth2
 OAUTH_PROVIDERS: dict[str, OAuthProvider] = {
     "gmail": OAuthProvider(
         name="Gmail",
@@ -68,7 +70,7 @@ OAUTH_PROVIDERS: dict[str, OAuthProvider] = {
     ),
 }
 
-
+# Token de autenticación OAuth2
 @dataclass
 class OAuthToken:
     provider: str
@@ -76,15 +78,15 @@ class OAuthToken:
     refresh_token: str = ""
     expires_at: float = 0.0
     token_type: str = "Bearer"
-
+    # Verifica si el token ha expirado
     def is_expired(self, *, skew_sec: int = 120) -> bool:
         if not self.expires_at:
             return False
         return time.time() >= self.expires_at - skew_sec
-
+    # Convierte el token a JSON
     def to_json(self) -> str:
         return json.dumps(asdict(self))
-
+    # Reconstruye el token desde un JSON
     @classmethod
     def from_json(cls, raw: str) -> OAuthToken:
         data = json.loads(raw)
@@ -174,27 +176,30 @@ def store_oauth_token(account_id: str, token: OAuthToken) -> None:
     """Alias de store_oauth_tokens (compatibilidad)."""
     store_oauth_tokens(account_id, token)
 
-
+# Elimina el token de autenticación OAuth2
 def delete_oauth_token(account_id: str) -> None:
     for key in (
         oauth_refresh_key(account_id),
         oauth_access_key(account_id),
         oauth_token_key(account_id),
     ):
+        # Elimina el token de autenticación OAuth2
         try:
             keyring.delete_password(SERVICE_NAME, key)
         except keyring.errors.PasswordDeleteError:
             pass
 
-
+# Verifica si el token de autenticación OAuth2 existe
 def has_oauth_token(account_id: str) -> bool:
     refresh = keyring.get_password(SERVICE_NAME, oauth_refresh_key(account_id))
+    # Si existe un refresh_token, devuelve True
     if refresh:
+        # Si existe un legacy_token, devuelve True
         return True
     legacy = _load_legacy_token(account_id)
     return legacy is not None and bool(legacy.refresh_token or legacy.access_token)
 
-
+# Detecta el proveedor de OAuth2
 def detect_oauth_provider(email: str, imap_host: str) -> str | None:
     host = imap_host.lower()
     addr = email.strip().lower()
@@ -211,7 +216,7 @@ def detect_oauth_provider(email: str, imap_host: str) -> str | None:
         return "outlook"
     return None
 
-
+# Mensaje de error si no hay sesión OAuth activa
 def oauth_not_configured_message(provider_key: str | None) -> str:
     if provider_key and oauth_clients_configured(provider_key):
         return (
@@ -221,7 +226,7 @@ def oauth_not_configured_message(provider_key: str | None) -> str:
         )
     return oauth_setup_instructions(provider_key or "gmail")
 
-
+# Genera un par de verificador y desafío de PKCE
 def generate_pkce_pair() -> tuple[str, str]:
     verifier = (
         base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
@@ -233,7 +238,7 @@ def generate_pkce_pair() -> tuple[str, str]:
     )
     return verifier, challenge
 
-
+# Construye la URL de autorización OAuth2
 def build_authorization_url(
     provider_key: str,
     client_id: str,
@@ -257,7 +262,7 @@ def build_authorization_url(
     query = urllib.parse.urlencode(params)
     return f"{provider.auth_url}?{query}"
 
-
+# Realiza una solicitud POST para obtener un token OAuth2
 def _post_token_request(provider_key: str, payload: dict[str, str]) -> OAuthToken:
     provider = OAUTH_PROVIDERS[provider_key]
     body = urllib.parse.urlencode(payload).encode("utf-8")
@@ -267,6 +272,7 @@ def _post_token_request(provider_key: str, payload: dict[str, str]) -> OAuthToke
         method="POST",
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
+    # Realiza una solicitud POST para obtener un token OAuth2
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -276,6 +282,7 @@ def _post_token_request(provider_key: str, payload: dict[str, str]) -> OAuthToke
     except urllib.error.URLError as exc:
         raise OAuthError(f"No se pudo contactar con el proveedor: {exc}") from exc
 
+    # Obtiene el access_token
     access = data.get("access_token")
     if not access:
         raise OAuthError(f"Respuesta OAuth sin access_token: {data}")
@@ -288,7 +295,7 @@ def _post_token_request(provider_key: str, payload: dict[str, str]) -> OAuthToke
         token_type=str(data.get("token_type", "Bearer") or "Bearer"),
     )
 
-
+# Intercambia un código de autorización por un token OAuth2
 def exchange_authorization_code(
     provider_key: str,
     client: OAuthClientCredentials,
@@ -307,22 +314,26 @@ def exchange_authorization_code(
         payload["client_secret"] = client.client_secret
     return _post_token_request(provider_key, payload)
 
-
+# Refresca un token OAuth2
 def refresh_oauth_token(
     provider_key: str,
     client: OAuthClientCredentials,
     token: OAuthToken,
 ) -> OAuthToken:
+    # Verifica si hay un refresh_token
     if not token.refresh_token:
         raise OAuthError("No hay refresh_token; vuelve a iniciar sesión OAuth.")
+    # Construye el payload para la solicitud POST
     payload = {
         "client_id": client.client_id,
         "refresh_token": token.refresh_token,
         "grant_type": "refresh_token",
     }
+    # Si hay un client_secret, añade el client_secret al payload
     if client.client_secret:
         payload["client_secret"] = client.client_secret
     refreshed = _post_token_request(provider_key, payload)
+    # Si no hay un refresh_token, crea un nuevo token con el refresh_token del token original
     if not refreshed.refresh_token:
         refreshed = OAuthToken(
             provider=refreshed.provider,
@@ -333,7 +344,7 @@ def refresh_oauth_token(
         )
     return refreshed
 
-
+# Devuelve un access_token válido, renovándolo si hace falta
 def ensure_valid_access_token(account: MailAccount) -> str:
     """Devuelve un access_token válido, renovándolo si hace falta."""
     provider_key = detect_oauth_provider(account.email, account.imap_host)
@@ -351,17 +362,18 @@ def ensure_valid_access_token(account: MailAccount) -> str:
     store_oauth_tokens(account.id, refreshed)
     return refreshed.access_token
 
-
+# Construye una cadena SASL XOAUTH2 (base64) para IMAP/SMTP
 def build_xoauth2_string(email: str, access_token: str) -> str:
     """Cadena SASL XOAUTH2 (base64) para IMAP/SMTP."""
     auth_str = f"user={email}\x01auth=Bearer {access_token}\x01\x01"
     return base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
 
-
+# Manejador de callback OAuth2
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
     server_version = "PyQorreosOAuth/1.0"
 
     def do_GET(self) -> None:
+        # Analiza la URL y obtiene los parámetros
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
         self.server.auth_code = params.get("code", [None])[0]  # type: ignore[attr-defined]
@@ -374,14 +386,14 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
             b"<html><body><h1>Autorizaci\xc3\xb3n completada</h1>"
             b"<p>Puedes cerrar esta ventana y volver a PyQorreos.</p></body></html>"
         )
-
+    # Maneja los mensajes de log
     def log_message(self, format: str, *args) -> None:
         return
 
-
+# Servidor de red para el callback OAuth2
 class _OAuthRedirectServer(socketserver.TCPServer):
     allow_reuse_address = True
-
+    # Inicializa el servidor de red para el callback OAuth2
     def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), _OAuthCallbackHandler)
         self.auth_code: str | None = None
@@ -406,13 +418,13 @@ class OAuthFlow:
         self.provider_key = provider_key
         self._open_browser = open_browser or webbrowser.open
         self.timeout_sec = timeout_sec
-
+    # Abre el navegador, espera el callback y devuelve los tokens (sin guardar).
     def run_flow(self) -> OAuthToken:
         """Abre el navegador, espera el callback y devuelve los tokens (sin guardar)."""
         client = load_oauth_client(self.provider_key)
         if not client:
             raise OAuthError(oauth_setup_instructions(self.provider_key))
-
+        # Genera un par de verificador y desafío de PKCE
         verifier, challenge = generate_pkce_pair()
         state = secrets.token_urlsafe(24)
         server = _OAuthRedirectServer()
@@ -420,14 +432,14 @@ class OAuthFlow:
         thread.start()
         port = server.server_address[1]
         redirect_uri = f"http://127.0.0.1:{port}/"
-
+        # Construye la URL de autorización OAuth2
         auth_url = build_authorization_url(
             self.provider_key, client.client_id, redirect_uri, challenge, state
         )
         if not self._open_browser(auth_url):
             server.shutdown()
             raise OAuthError("No se pudo abrir el navegador web.")
-
+        # Establece un tiempo de espera para la autorización
         deadline = time.time() + self.timeout_sec
         try:
             while time.time() < deadline:
@@ -437,7 +449,7 @@ class OAuthFlow:
         finally:
             server.shutdown()
             thread.join(timeout=2)
-
+        # Si hay un error de autorización, lanza un error
         if server.auth_error:
             raise OAuthError(f"Autorización rechazada: {server.auth_error}")
         if not server.auth_code:
@@ -448,6 +460,7 @@ class OAuthFlow:
         token = exchange_authorization_code(
             self.provider_key, client, server.auth_code, redirect_uri, verifier
         )
+        # Si no hay un refresh_token, lanza un error
         if not token.refresh_token:
             raise OAuthError(
                 "El proveedor no devolvió refresh_token. "
@@ -455,7 +468,7 @@ class OAuthFlow:
             )
         return token
 
-
+# Atajo síncrono (bloquea el hilo llamador). Preferir OAuthFlowWorker en la UI.
 def run_oauth_authorization(
     provider_key: str,
     account_id: str,
