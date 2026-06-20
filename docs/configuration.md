@@ -21,6 +21,18 @@ Los archivos sensibles (`oauth_clients.json`, `accounts.json`, `mail_cache.db`, 
 
 - Para **Gmail** puedes usar **OAuth2** (recomendado) o una [contraseña de aplicación](https://support.google.com/accounts/answer/185833).
 - Para **Outlook / Hotmail / MSN / Live** (`@outlook.*`, `@hotmail.*`, `@live.*`, `@msn.com`): elige el preset **Outlook / Hotmail / MSN** o escribe el correo y se autoconfigura. **OAuth2** (Microsoft) es lo recomendado; con contraseña, puede hacer falta una contraseña de aplicación si tienes verificación en dos pasos.
+- **Envío bloqueado por Microsoft** (`550 country not allowed`): el SMTP de Microsoft puede rechazar conexiones desde ciertas redes (VPN, IP de servidor/VPS, país distinto al habitual). No depende del acuse de recibo ni de los adjuntos. Prueba otra red, sin VPN, o envía desde [Outlook en la web](https://outlook.live.com/).
+
+#### Si usas VPN (Outlook / Hotmail / MSN)
+
+Microsoft suele **bloquear el envío SMTP** cuando la VPN saca el tráfico por un país distinto al de tu cuenta. La **lectura** (IMAP) a veces sigue funcionando; el fallo aparece al **enviar**.
+
+Opciones habituales:
+
+1. **Desconectar la VPN** solo al enviar correo (puedes volver a conectarla después).
+2. **Split tunneling** en tu cliente VPN: excluir `smtp.office365.com` y `outlook.office365.com` para que el correo salga por tu IP real.
+3. Elegir un **servidor VPN en tu país** (menos fiable que las dos anteriores).
+4. Cuentas **Gmail, AOL o hosting propio** suelen ser menos estrictas con VPN; MSN/Outlook es el caso más habitual.
 - Para **AOL** (`@aol.*`): preset **AOL** (`imap.aol.com` / `smtp.aol.com`); suele requerir [contraseña de aplicación](https://login.aol.com/account/security).
 - Para **Yahoo**: preset Yahoo; contraseña de aplicación habitual en cuentas con 2FA.
 - Para **hosting / cPanel** (Webempresa, Raiola, etc.): preset **Hosting / cPanel**. Suele ser `mail.tudominio.com`, usuario = correo completo, IMAP **993 SSL/TLS**, SMTP **465 SSL** o **587 STARTTLS**. Usa **Probar conexión** antes de guardar.
@@ -60,6 +72,12 @@ El `refresh_token` se guarda en el llavero de forma permanente; el `access_token
 - Configura el idioma destino en **Archivo → Preferencias → General**.
 - El texto se extrae del mensaje (HTML o parte de texto plano) y se limpia de restos de maquetación antes de traducir; el resultado se muestra en modo lectura con enlaces activos.
 - Las traducciones se **cachean por mensaje**; «Ver original» restaura el correo sin volver a descargarlo.
+
+### Acuse de recibo
+
+- Al **enviar**: marca «Solicitar acuse de recibo» en el editor, o activa **Solicitar acuse de recibo al enviar por defecto** en **Archivo → Preferencias → General → Redacción**.
+- Al **recibir**: si el remitente lo pidió, el visor muestra un aviso con **Enviar acuse** o **Descartar**. El acuse se envía por SMTP como notificación MDN estándar.
+- Gmail y otros clientes pueden ignorar la solicitud o preguntar al usuario antes de enviar el acuse.
 
 ### Carpetas IMAP
 

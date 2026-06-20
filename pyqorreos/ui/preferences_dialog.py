@@ -128,6 +128,21 @@ class PreferencesDialog(QDialog):
 
         layout.addWidget(sync_group)
 
+        compose_group = QGroupBox("Redacción")
+        compose_form = QFormLayout(compose_group)
+
+        self.compose_read_receipt = QCheckBox(
+            "Solicitar acuse de recibo al enviar por defecto"
+        )
+        self.compose_read_receipt.setToolTip(
+            "Marca la casilla «Solicitar acuse de recibo» al abrir el editor de correo. "
+            "El destinatario decide si responde."
+        )
+        self.compose_read_receipt.setChecked(self._prefs.compose_request_read_receipt)
+        compose_form.addRow(self.compose_read_receipt)
+
+        layout.addWidget(compose_group)
+
         download_group = QGroupBox("Descarga de mensajes")
         download_form = QFormLayout(download_group)
 
@@ -508,4 +523,5 @@ class PreferencesDialog(QDialog):
             compose_snippets=copy.deepcopy(self._snippets),
             translate_target_language=self.translate_lang.currentData(),
             theme=self.theme_combo.currentData(),
+            compose_request_read_receipt=self.compose_read_receipt.isChecked(),
         )

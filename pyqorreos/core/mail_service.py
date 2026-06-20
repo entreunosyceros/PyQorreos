@@ -29,7 +29,12 @@ from typing import Any, Callable
 from pyqorreos.core.account import MailAccount
 from pyqorreos.core.oauth import AuthMethod, build_xoauth2_string
 from pyqorreos.core.classifier import MailCategory, MailClassifier
-from pyqorreos.core.compose_email import EmailAttachment
+from pyqorreos.core.compose_email import (
+    EmailAttachment,
+    apply_read_receipt_headers,
+    build_read_receipt_bytes,
+    parse_read_receipt_request,
+)
 from pyqorreos.core.email_html import prepare_html_for_display
 from pyqorreos.core.network_errors import friendly_mail_error
 
@@ -127,6 +132,7 @@ class MailMessage:
     unsubscribe_url: str | None = None
     unsubscribe_mailto: str | None = None
     one_click_unsubscribe: bool = False
+    read_receipt_to: str = ""
 
 
 def _decode_header_value(value: str | None) -> str:
@@ -865,7 +871,59 @@ class MailService:
             unsubscribe_url=unsub.get("url") if isinstance(unsub.get("url"), str) else None,
             unsubscribe_mailto=unsub.get("mailto") if isinstance(unsub.get("mailto"), str) else None,
             one_click_unsubscribe=bool(unsub.get("one_click")),
+            read_receipt_to=parse_read_receipt_request(msg),
         )
+
+    def send_read_receipt(
+        self,
+        *,
+        receipt_to: str,
+        original_subject: str,
+        original_message_id: str = "",
+    ) -> None:
+        """Envía un acuse de lectura (MDN) al remitente que lo solicitó."""
+        address = receipt_to.strip()
+        if not address:
+            raise ValueError("No hay dirección de acuse de recibo")
+        raw = build_read_receipt_bytes(
+            from_email=self.account.email,
+            display_name=self.account.display_name,
+            receipt_to=address,
+            original_subject=original_subject,
+            original_message_id=original_message_id,
+        )
+        msg = email.message_from_bytes(raw)
+        self._deliver_message(msg, [address])
+
+    def _deliver_message(self, msg: email.message.Message, recipients: list[str]) -> None:
+        if not recipients:
+            raise ValueError("No hay destinatarios")
+        context = _mail_ssl_context()
+
+        use_smtp_ssl = self.account.smtp_port == 465 or (
+            self.account.use_ssl and not self.account.use_starttls
+        )
+        if use_smtp_ssl:
+            with smtplib.SMTP_SSL(
+                self.account.smtp_host,
+                self.account.smtp_port,
+                context=context,
+                timeout=SMTP_SOCKET_TIMEOUT,
+            ) as server:
+                self._smtp_login(server)
+                server.send_message(msg, to_addrs=recipients)
+        else:
+            with smtplib.SMTP(
+                self.account.smtp_host,
+                self.account.smtp_port,
+                timeout=SMTP_SOCKET_TIMEOUT,
+            ) as server:
+                server.ehlo()
+                if self.account.use_starttls:
+                    server.starttls(context=context)
+                    server.ehlo()
+                self._smtp_login(server)
+                server.send_message(msg, to_addrs=recipients)
 
     def fetch_attachment_bytes(
         self, uid: str, part_index: int, folder: str | None = None
@@ -945,6 +1003,7 @@ class MailService:
         bcc: str = "",
         body_html: str | None = None,
         attachments: list[EmailAttachment] | None = None,
+        request_read_receipt: bool = False,
     ) -> None:
         msg = EmailMessage()
         from_header = (
@@ -957,6 +1016,13 @@ class MailService:
         if cc:
             msg["Cc"] = cc
         msg["Subject"] = subject
+
+        if request_read_receipt:
+            apply_read_receipt_headers(
+                msg,
+                self.account.email,
+                display_name=self.account.display_name,
+            )
 
         plain = body or ""
         html = (body_html or "").strip()
@@ -984,32 +1050,7 @@ class MailService:
             msg.set_content(plain, charset="utf-8")
 
         recipients = [a.strip() for a in f"{to},{cc},{bcc}".split(",") if a.strip()]
-        context = _mail_ssl_context()
-
-        use_smtp_ssl = self.account.smtp_port == 465 or (
-            self.account.use_ssl and not self.account.use_starttls
-        )
-        if use_smtp_ssl:
-            with smtplib.SMTP_SSL(
-                self.account.smtp_host,
-                self.account.smtp_port,
-                context=context,
-                timeout=SMTP_SOCKET_TIMEOUT,
-            ) as server:
-                self._smtp_login(server)
-                server.send_message(msg, to_addrs=recipients)
-        else:
-            with smtplib.SMTP(
-                self.account.smtp_host,
-                self.account.smtp_port,
-                timeout=SMTP_SOCKET_TIMEOUT,
-            ) as server:
-                server.ehlo()
-                if self.account.use_starttls:
-                    server.starttls(context=context)
-                    server.ehlo()
-                self._smtp_login(server)
-                server.send_message(msg, to_addrs=recipients)
+        self._deliver_message(msg, recipients)
 
     def set_flagged(self, uid: str, flagged: bool = True, folder: str | None = None) -> None:
         """Marca o desmarca un mensaje con el flag \\Flagged (importante en IMAP)."""

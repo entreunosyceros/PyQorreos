@@ -8,7 +8,87 @@ import base64
 import mimetypes
 import re
 from dataclasses import dataclass
+from email.message import EmailMessage, Message
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr, getaddresses
 from pathlib import Path
+
+_READ_RECEIPT_HEADERS = (
+    "Disposition-Notification-To",
+    "Return-Receipt-To",
+    "X-Confirm-Reading-To",
+)
+
+
+# Cabeceras estándar para solicitar acuse de lectura al destinatario.
+def apply_read_receipt_headers(
+    msg: EmailMessage,
+    receipt_to: str,
+    *,
+    display_name: str = "",
+) -> None:
+    """Añade cabecera MDN (RFC 3798). El cliente del destinatario decide si responde."""
+    address = receipt_to.strip()
+    if not address:
+        return
+    formatted = (
+        formataddr((display_name.strip(), address))
+        if display_name.strip()
+        else address
+    )
+    # Solo Disposition-Notification-To (estándar). Return-Receipt-To es legado y
+    # algunos servidores SMTP (p. ej. Microsoft) lo rechazan o malinterpretan.
+    msg["Disposition-Notification-To"] = formatted
+
+
+def parse_read_receipt_request(msg: Message) -> str:
+    """Devuelve la dirección que solicita acuse de recibo, si existe."""
+    for header in _READ_RECEIPT_HEADERS:
+        raw = msg.get(header)
+        if not raw:
+            continue
+        for _name, addr in getaddresses([str(raw)]):
+            if addr:
+                return addr
+    return ""
+
+
+def build_read_receipt_bytes(
+    *,
+    from_email: str,
+    display_name: str,
+    receipt_to: str,
+    original_subject: str,
+    original_message_id: str = "",
+) -> bytes:
+    """Construye un MDN (acuse de lectura) para enviar por SMTP."""
+    from_header = (
+        f"{display_name} <{from_email}>" if display_name else from_email
+    )
+    subject = original_subject or "(Sin asunto)"
+    human = (
+        f"El mensaje con asunto «{subject}» ha sido leído.\n"
+        "Este es un acuse de recibo automático enviado por PyQorreos."
+    )
+    notification_lines = [
+        "Reporting-UA: PyQorreos; Python",
+        f"Final-Recipient: rfc822; {from_email}",
+    ]
+    if original_message_id:
+        notification_lines.append(f"Original-Message-ID: {original_message_id}")
+    notification_lines.append(
+        "Disposition: automatic-action/MDN-sent-automatically; displayed"
+    )
+    notification = "\r\n".join(notification_lines) + "\r\n"
+
+    outer = MIMEMultipart("report", report_type="disposition-notification")
+    outer["From"] = from_header
+    outer["To"] = receipt_to
+    outer["Subject"] = f"Leído: {subject}"
+    outer.attach(MIMEText(human, "plain", "utf-8"))
+    outer.attach(MIMEText(notification, _subtype="disposition-notification"))
+    return outer.as_bytes()
 
 
 @dataclass
@@ -86,10 +166,9 @@ def build_draft_bytes(
     subject: str,
     body_plain: str,
     body_html: str,
+    request_read_receipt: bool = False,
 ) -> bytes:
     """Construye un mensaje RFC822 para guardar como borrador IMAP."""
-    from email.message import EmailMessage
-
     msg = EmailMessage()
     from_header = (
         f"{display_name} <{from_email}>" if display_name else from_email
@@ -102,6 +181,8 @@ def build_draft_bytes(
     if bcc:
         msg["Bcc"] = bcc
     msg["Subject"] = subject or "(Sin asunto)"
+    if request_read_receipt:
+        apply_read_receipt_headers(msg, from_email, display_name=display_name)
     html = (body_html or "").strip()
     plain = body_plain or ""
     if html:

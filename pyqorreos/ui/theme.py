@@ -508,6 +508,7 @@ def about_features_html(theme: str | None = None) -> str:
 <li><b>Visor HTML</b> — WebEngine, imágenes cid y remotas bajo demanda</li>
 <li><b>Traducción</b> — bajo demanda al idioma de Preferencias</li>
 <li><b>Responder / reenviar / eliminar</b> — barra de herramientas y menú contextual</li>
+<li><b>Acuse de recibo</b> — solicitar al enviar o responder cuando te lo pidan</li>
 <li><b>Editor enriquecido</b> — negrita, cursiva, listas, enlaces, imágenes</li>
 <li><b>Tema claro y oscuro</b> — Preferencias → Apariencia</li>
 <li><b>Contraseñas seguras</b> con keyring del sistema</li>

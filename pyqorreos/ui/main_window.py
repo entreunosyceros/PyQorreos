@@ -98,6 +98,7 @@ from pyqorreos.ui.workers import (
     LoadFolderWorker,
     MoveMessagesWorker,
     SaveDraftWorker,
+    SendReadReceiptWorker,
     SetSeenWorker,
     StorageQuotaWorker,
     SyncFolderWorker,
@@ -248,6 +249,7 @@ class MainWindow(QMainWindow):
         self.sort_combo.setCurrentIndex(0)
         self.sort_combo.blockSignals(False)
         self._current_page = 0
+        self._preload_cached_folders(account.id)
         self._preload_cached_folder(account.id, "INBOX")
         self._background_sync.set_accounts(self.accounts, account.id)
         if self._prefs.background_sync_enabled:
@@ -505,6 +507,9 @@ class MainWindow(QMainWindow):
         self.message_viewer.translate_requested.connect(self._on_translate_requested)
         self.message_viewer.restore_original_requested.connect(
             self._restore_original_message_view
+        )
+        self.message_viewer.send_read_receipt_requested.connect(
+            self._send_read_receipt_for_current
         )
         self.message_viewer.link_hover_changed.connect(self._on_viewer_link_hover)
         reader_layout.addWidget(self.message_viewer, 1)
@@ -1860,6 +1865,7 @@ class MainWindow(QMainWindow):
         self.settings.set_last_account_id(account.id)
         self._update_accounts_registry()
         self._refresh_account_combo(account.id)
+        self._preload_cached_folders(account.id)
         self._preload_cached_folder(account.id, "INBOX")
         self.status_bar.showMessage(f"Conectando a {account.email}…")
         if block_ui:
@@ -1886,14 +1892,19 @@ class MainWindow(QMainWindow):
             auth_secret = self.settings.get_auth_secret(self.current_account)
             if not auth_secret:
                 raise RuntimeError("No hay credenciales guardadas para esta cuenta.")
+
+            self._folder_names = list(folder_names) if folder_names else ["INBOX"]
+            self.mail_cache.save_account_folders(
+                self.current_account.id, self._folder_names
+            )
+            self._refresh_folder_tree(select_folder=self._current_folder or "INBOX")
+
             self.mail_service = MailService(
                 self.current_account,
                 auth_secret,
                 self.settings.get_classifier(),
             )
             self.mail_service.connect()
-            self._folder_names = list(folder_names) if folder_names else ["INBOX"]
-            self._refresh_folder_tree(select_folder="INBOX")
             self._refresh_folder_unread_counts()
             self._refresh_storage_quota()
 
@@ -1932,6 +1943,11 @@ class MainWindow(QMainWindow):
             return
         self._disconnect_thread_signals(worker)
         self._stop_thread(worker, wait_ms=wait_ms)
+
+    def _preload_cached_folders(self, account_id: str) -> None:
+        """Muestra el árbol de carpetas desde caché antes de conectar por IMAP."""
+        self._folder_names = self.mail_cache.load_account_folders(account_id)
+        self._refresh_folder_tree(select_folder=self._current_folder or "INBOX")
 
     def _preload_cached_folder(self, account_id: str, folder: str) -> None:
         """Muestra mensajes en caché antes de que termine la conexión IMAP."""
@@ -2133,6 +2149,8 @@ class MainWindow(QMainWindow):
     def _on_folder_deleted(self, payload) -> None:
         deleted_paths, folders = payload
         self._folder_names = folders
+        if self.current_account:
+            self.mail_cache.save_account_folders(self.current_account.id, folders)
         if self._current_folder in deleted_paths or any(
             self._current_folder.startswith(path + "/") for path in deleted_paths
         ):
@@ -2937,6 +2955,7 @@ class MainWindow(QMainWindow):
         else:
             self.message_viewer.show_plain(message.body_text or "(Mensaje vacío)")
 
+        self.message_viewer.set_read_receipt_request(message.read_receipt_to)
         self._update_translate_button()
 
         row = self.message_table.currentRow()
@@ -3224,6 +3243,8 @@ class MainWindow(QMainWindow):
     def _on_folder_created(self, payload) -> None:
         created_path, folders = payload
         self._folder_names = folders
+        if self.current_account:
+            self.mail_cache.save_account_folders(self.current_account.id, folders)
         self._refresh_folder_tree(select_folder=created_path)
         self._refresh_folder_unread_counts()
         self.status_bar.showMessage(f"Carpeta creada: {created_path}")
@@ -3376,6 +3397,7 @@ class MainWindow(QMainWindow):
             unsubscribe_url=self._current_message.unsubscribe_url,
             unsubscribe_mailto=self._current_message.unsubscribe_mailto,
             one_click_unsubscribe=self._current_message.one_click_unsubscribe,
+            read_receipt_to=self._current_message.read_receipt_to,
         )
         if self.current_account:
             self.mail_cache.save_message_body(
@@ -3470,6 +3492,74 @@ class MainWindow(QMainWindow):
             f"Espacio: {self._format_bytes(used)} de {self._format_bytes(limit)}"
         )
         self.quota_label.setVisible(True)
+
+    def _send_read_receipt_for_current(self) -> None:
+        if not self._message_loaded_for_selection() or not self._current_message:
+            return
+        if not self.mail_service:
+            return
+        msg = self._current_message
+        if not msg.read_receipt_to:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Enviar acuse de recibo",
+            "¿Confirmar al remitente que has leído este mensaje?\n\n"
+            f"Se enviará a: {msg.read_receipt_to}",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.status_bar.showMessage("Enviando acuse de recibo…")
+        self.message_viewer.setEnabled(False)
+        worker = SendReadReceiptWorker(
+            self.mail_service,
+            msg.read_receipt_to,
+            msg.subject,
+            msg.message_id,
+        )
+        worker.signals.finished.connect(self._on_read_receipt_sent)
+        worker.signals.error.connect(self._on_read_receipt_error)
+        worker.start()
+        self._track_worker(worker)
+
+    def _on_read_receipt_sent(self, _) -> None:
+        self.message_viewer.setEnabled(True)
+        if not self._current_message:
+            return
+        self._current_message = MailMessage(
+            uid=self._current_message.uid,
+            subject=self._current_message.subject,
+            sender=self._current_message.sender,
+            recipients=self._current_message.recipients,
+            date=self._current_message.date,
+            body_text=self._current_message.body_text,
+            body_html=self._current_message.body_html,
+            category=self._current_message.category,
+            attachments=self._current_message.attachments,
+            message_id=self._current_message.message_id,
+            in_reply_to=self._current_message.in_reply_to,
+            references=self._current_message.references,
+            unsubscribe_url=self._current_message.unsubscribe_url,
+            unsubscribe_mailto=self._current_message.unsubscribe_mailto,
+            one_click_unsubscribe=self._current_message.one_click_unsubscribe,
+            read_receipt_to="",
+        )
+        if self.current_account:
+            self.mail_cache.save_message_body(
+                self.current_account.id, self._current_folder, self._current_message
+            )
+        self.message_viewer.clear_read_receipt_request()
+        self.status_bar.showMessage("Acuse de recibo enviado")
+        QMessageBox.information(
+            self,
+            "Acuse enviado",
+            "Se ha notificado al remitente que leíste el mensaje.",
+        )
+
+    def _on_read_receipt_error(self, message: str) -> None:
+        self.message_viewer.setEnabled(True)
+        self.status_bar.showMessage("Error al enviar acuse de recibo")
+        QMessageBox.warning(self, "Error de acuse de recibo", message)
 
     def _unsubscribe_current_message(self) -> None:
         if not self._message_loaded_for_selection() or not self._current_message:
@@ -3634,6 +3724,7 @@ class MainWindow(QMainWindow):
             signature=self.current_account.signature if self.current_account else "",
             drafts_folder=find_drafts_folder(self._folder_names),
             snippets=self._prefs.compose_snippets,
+            request_read_receipt_default=self._prefs.compose_request_read_receipt,
         )
         self._exec_modal(dialog)
 

@@ -8,6 +8,8 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ## Proveedores, rendimiento y pulido (reciente)
 
+- **Acuse de recibo** opcional al redactar (solicitud MDN al enviar); preferencia por defecto en General → Redacción.
+- Aviso y envío de acuse cuando un mensaje recibido lo solicita (`Disposition-Notification-To`, etc.).
 - Presets y autodetección para **AOL**, **Hotmail**, **MSN** y **Live** (Microsoft OAuth compartido con Outlook).
 - **Eliminación en lote** más rápida (IMAP `UID STORE` por lotes + caché SQLite en una transacción) con feedback visual.
 - Caché SQLite: **`busy_timeout`** para evitar errores `database is locked` durante sync y lectura simultánea.
@@ -26,7 +28,7 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ## Arranque y sincronización
 
-- **Al abrir la aplicación** se muestra de inmediato la caché local de INBOX (sin esperar a IMAP).
+- **Al abrir la aplicación** se muestra de inmediato la caché local de INBOX y el árbol de carpetas (sin esperar a IMAP).
 - En paralelo se **conecta al servidor** y se **descargan cabeceras nuevas** de la carpeta activa.
 - Si la sincronización en segundo plano está activa (Preferencias → General), el **INBOX del resto de cuentas** también se actualiza al arrancar.
 - La ventana **no se bloquea** durante la conexión inicial: puedes ver la caché mientras llega el correo nuevo.

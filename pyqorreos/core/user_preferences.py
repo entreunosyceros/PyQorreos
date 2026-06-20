@@ -37,6 +37,7 @@ class UserPreferences:
     )
     translate_target_language: str = "es"
     theme: str = "light"
+    compose_request_read_receipt: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)

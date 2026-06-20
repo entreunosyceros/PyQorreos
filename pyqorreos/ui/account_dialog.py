@@ -358,7 +358,10 @@ class AccountDialog(QDialog):
                 "<b>Outlook / Hotmail / MSN</b><br>"
                 "Usa tu correo completo como usuario. Recomendado: <b>OAuth2</b> "
                 "(Microsoft) en Autenticación. Con contraseña, puede hacer falta una "
-                "<b>contraseña de aplicación</b> si tienes verificación en dos pasos."
+                "<b>contraseña de aplicación</b> si tienes verificación en dos pasos.<br>"
+                "Si usas <b>VPN</b>, Microsoft puede rechazar el <b>envío</b> "
+                "(error «country not allowed»). Prueba sin VPN o excluye "
+                "<code>smtp.office365.com</code> del túnel VPN."
             )
             self.password_label.setText("Contraseña:")
             if self.account:

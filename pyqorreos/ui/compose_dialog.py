@@ -10,6 +10,7 @@ import html as html_module
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from pyqorreos.core.account import is_microsoft_email
 from pyqorreos.core.compose_email import EmailAttachment, build_draft_bytes, prepare_outgoing_html
 from pyqorreos.core.compose_utils import (
     body_mentions_attachment,
@@ -50,6 +52,7 @@ class ComposeDialog(QDialog):
         signature: str = "",
         drafts_folder: str | None = None,
         snippets: list[dict[str, str]] | None = None,
+        request_read_receipt_default: bool = False,
     ) -> None:
         super().__init__(parent)
         self.service = service
@@ -58,6 +61,7 @@ class ComposeDialog(QDialog):
         self._drafts_folder = drafts_folder
         self._snippets = snippets or list(DEFAULT_COMPOSE_SNIPPETS)
         self._attachments: list[EmailAttachment] = []
+        self._request_read_receipt_default = request_read_receipt_default
         self.setWindowTitle(title)
         self.setMinimumSize(720, 560)
         self.resize(820, 620)
@@ -130,6 +134,20 @@ class ComposeDialog(QDialog):
         self.attach_list = QListWidget()
         self.attach_list.setMaximumHeight(72)
         layout.addWidget(self.attach_list)
+
+        self.read_receipt_check = QCheckBox("Solicitar acuse de recibo")
+        self.read_receipt_check.setChecked(self._request_read_receipt_default)
+        receipt_tip = (
+            "Pide al destinatario confirmar la lectura del mensaje. "
+            "Muchos clientes lo ignoran o preguntan al usuario antes de enviarlo."
+        )
+        if is_microsoft_email(self.service.account.email):
+            receipt_tip += (
+                " Con cuentas Microsoft, si el envío falla suele deberse a la VPN "
+                "(error «country not allowed»), no a esta casilla."
+            )
+        self.read_receipt_check.setToolTip(receipt_tip)
+        layout.addWidget(self.read_receipt_check)
 
         buttons = QDialogButtonBox()
         self.draft_btn = QPushButton("Guardar borrador")
@@ -230,6 +248,7 @@ class ComposeDialog(QDialog):
             subject=self.subject_edit.text().strip(),
             body_plain=plain,
             body_html=html,
+            request_read_receipt=self.read_receipt_check.isChecked(),
         )
         self.setEnabled(False)
         worker = SaveDraftWorker(self.service, self._drafts_folder, raw)
@@ -293,6 +312,7 @@ class ComposeDialog(QDialog):
             self.bcc_edit.text().strip(),
             body_html=html,
             attachments=list(self._attachments),
+            request_read_receipt=self.read_receipt_check.isChecked(),
         )
         self.worker.signals.finished.connect(self._on_sent)
         self.worker.signals.error.connect(self._on_error)
@@ -304,4 +324,13 @@ class ComposeDialog(QDialog):
 
     def _on_error(self, message: str) -> None:
         self.setEnabled(True)
+        if (
+            self.read_receipt_check.isChecked()
+            and is_microsoft_email(self.service.account.email)
+            and "country not allowed" in message.lower()
+        ):
+            message += (
+                "\n\nEl acuse de recibo no provoca este error. "
+                "Desactiva la VPN o excluye smtp.office365.com del túnel y vuelve a intentar."
+            )
         QMessageBox.critical(self, "Error", message)

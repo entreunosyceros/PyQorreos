@@ -48,6 +48,7 @@ class MessageViewer(QWidget):
     load_remote_images_requested = Signal()
     translate_requested = Signal()
     restore_original_requested = Signal()
+    send_read_receipt_requested = Signal()
     link_hover_changed = Signal(str)
 
     def __init__(self, parent=None) -> None:
@@ -61,6 +62,7 @@ class MessageViewer(QWidget):
         self._hovered_link_url = ""
         self._showing_translation = False
         self._compact_toolbar = False
+        self._read_receipt_to = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -107,6 +109,29 @@ class MessageViewer(QWidget):
         self._link_warning.setVisible(False)
         mark_role(self._link_warning, "link-warning")
         layout.addWidget(self._link_warning)
+
+        self._read_receipt_bar = QWidget()
+        receipt_layout = QHBoxLayout(self._read_receipt_bar)
+        receipt_layout.setContentsMargins(0, 0, 0, 0)
+        receipt_layout.setSpacing(8)
+        self._read_receipt_label = QLabel()
+        self._read_receipt_label.setWordWrap(True)
+        mark_role(self._read_receipt_label, "hint")
+        receipt_layout.addWidget(self._read_receipt_label, 1)
+        self._btn_send_receipt = QPushButton("Enviar acuse")
+        self._btn_send_receipt.setToolTip(
+            "Confirma al remitente que has leído este mensaje"
+        )
+        self._btn_send_receipt.clicked.connect(self.send_read_receipt_requested.emit)
+        mark_role(self._btn_send_receipt, "secondary")
+        receipt_layout.addWidget(self._btn_send_receipt)
+        self._btn_dismiss_receipt = QPushButton("Descartar")
+        self._btn_dismiss_receipt.setToolTip("Ocultar este aviso sin enviar acuse")
+        self._btn_dismiss_receipt.clicked.connect(self._dismiss_read_receipt)
+        mark_role(self._btn_dismiss_receipt, "default")
+        receipt_layout.addWidget(self._btn_dismiss_receipt)
+        self._read_receipt_bar.setVisible(False)
+        layout.addWidget(self._read_receipt_bar)
 
         self._stack = QStackedWidget()
         self._stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -258,6 +283,26 @@ class MessageViewer(QWidget):
         """Restaura el estado del visor al cambiar de mensaje."""
         self._reset_translation_state()
         self._clear_link_hover()
+        self._read_receipt_to = ""
+        self._read_receipt_bar.setVisible(False)
+
+    def set_read_receipt_request(self, receipt_to: str) -> None:
+        """Muestra aviso si el remitente pidió acuse de recibo."""
+        self._read_receipt_to = receipt_to.strip()
+        if self._read_receipt_to:
+            self._read_receipt_label.setText(
+                f"El remitente solicita un acuse de recibo ({self._read_receipt_to})."
+            )
+            self._read_receipt_bar.setVisible(True)
+        else:
+            self._read_receipt_bar.setVisible(False)
+
+    def clear_read_receipt_request(self) -> None:
+        self._read_receipt_to = ""
+        self._read_receipt_bar.setVisible(False)
+
+    def _dismiss_read_receipt(self) -> None:
+        self.clear_read_receipt_request()
 
     def _on_translate_button_clicked(self) -> None:
         if self._showing_translation:
@@ -433,6 +478,7 @@ class MessageViewer(QWidget):
         self._btn_translate.setVisible(False)
         self._reset_translation_state()
         self._clear_link_hover()
+        self.clear_read_receipt_request()
         self._stored_html = ""
         self._stored_plain = ""
         self._stored_base_url = ""

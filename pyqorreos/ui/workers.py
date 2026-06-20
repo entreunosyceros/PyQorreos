@@ -378,6 +378,7 @@ class SendMailWorker(QThread):
         bcc: str = "",
         body_html: str | None = None,
         attachments: list | None = None,
+        request_read_receipt: bool = False,
     ) -> None:
         super().__init__()
         self.service = service
@@ -388,6 +389,7 @@ class SendMailWorker(QThread):
         self.bcc = bcc
         self.body_html = body_html
         self.attachments = attachments or []
+        self.request_read_receipt = request_read_receipt
         self.signals = WorkerSignals()
 
     def run(self) -> None:
@@ -400,6 +402,34 @@ class SendMailWorker(QThread):
                 self.bcc,
                 body_html=self.body_html,
                 attachments=self.attachments,
+                request_read_receipt=self.request_read_receipt,
+            )
+            self.signals.finished.emit(True)
+        except Exception as exc:
+            self.signals.error.emit(friendly_mail_error(exc))
+
+
+class SendReadReceiptWorker(QThread):
+    def __init__(
+        self,
+        service: MailService,
+        receipt_to: str,
+        original_subject: str,
+        original_message_id: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.receipt_to = receipt_to
+        self.original_subject = original_subject
+        self.original_message_id = original_message_id
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            self.service.send_read_receipt(
+                receipt_to=self.receipt_to,
+                original_subject=self.original_subject,
+                original_message_id=self.original_message_id,
             )
             self.signals.finished.emit(True)
         except Exception as exc:

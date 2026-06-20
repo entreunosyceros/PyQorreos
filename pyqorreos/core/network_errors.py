@@ -10,9 +10,44 @@ import socket
 import ssl
 
 
+def _smtp_payload_text(payload: object) -> str:
+    if isinstance(payload, bytes):
+        return payload.decode("utf-8", errors="replace").strip()
+    return str(payload).strip()
+
+
+def _smtp_exception_detail(exc: BaseException) -> str:
+    """Texto del servidor SMTP (código + mensaje) si está disponible."""
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        parts: list[str] = []
+        for address, reply in exc.recipients.items():
+            if isinstance(reply, tuple) and len(reply) >= 2:
+                parts.append(f"{address}: {reply[0]} {_smtp_payload_text(reply[1])}")
+            else:
+                parts.append(f"{address}: {reply}")
+        return "; ".join(parts)
+    if isinstance(exc, smtplib.SMTPResponseException):
+        code = getattr(exc, "smtp_code", "")
+        err = _smtp_payload_text(getattr(exc, "smtp_error", ""))
+        return f"{code} {err}".strip()
+    return str(exc).strip()
+
+
+def _microsoft_country_block_message() -> str:
+    return (
+        "Microsoft (Outlook, Hotmail, MSN) ha rechazado el envío desde tu red actual "
+        "(error «country not allowed» / país no permitido). "
+        "Suele ocurrir con VPN, IP de servidor o datacenter, o al conectarte desde un país "
+        "distinto al habitual de la cuenta. "
+        "Prueba sin VPN, desde otra red o envía desde outlook.com en el navegador. "
+        "No está causado por solicitar acuse de recibo: el bloqueo afecta a todo envío SMTP."
+    )
+
+
 def friendly_mail_error(exc: BaseException) -> str:
     """Convierte excepciones de red/IMAP/SMTP en texto útil para el usuario."""
-    raw = str(exc).strip()
+    detail = _smtp_exception_detail(exc)
+    raw = detail or str(exc).strip()
     lowered = raw.lower()
 
     if isinstance(exc, imaplib.IMAP4.error):
@@ -43,10 +78,22 @@ def friendly_mail_error(exc: BaseException) -> str:
             "Revisa usuario, contraseña y el puerto de envío (465 SSL o 587 STARTTLS)."
         )
 
+    if "country not allowed" in lowered:
+        return _microsoft_country_block_message()
+
+    if isinstance(exc, smtplib.SMTPRecipientsRefused):
+        if "country not allowed" in lowered:
+            return _microsoft_country_block_message()
+        return (
+            f"El servidor rechazó uno o más destinatarios:\n{raw}"
+        )
+
     # Error de excepción SMTP.
     if isinstance(exc, smtplib.SMTPException):
         if "data" in lowered and ("size" in lowered or "limit" in lowered):
             return "El servidor rechazó el mensaje: demasiado grande (adjuntos o cuerpo)."
+        if "country not allowed" in lowered:
+            return _microsoft_country_block_message()
         return raw or "Error del servidor SMTP."
 
     # Error de tiempo de espera.
@@ -76,5 +123,8 @@ def friendly_mail_error(exc: BaseException) -> str:
             return "No se encontró el servidor. Revisa el nombre del host IMAP/SMTP."
         if "timed out" in lowered:
             return "Tiempo de espera agotado. La red puede ser lenta o el servidor no responde."
+
+    if "country not allowed" in lowered:
+        return _microsoft_country_block_message()
 
     return raw or "Error de red o de correo."

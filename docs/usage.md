@@ -8,7 +8,7 @@ Guía de los primeros pasos. Si aún no has instalado la app, empieza por [Insta
 
 Si ya tienes cuentas configuradas, PyQorreos:
 
-1. Muestra **de inmediato** los mensajes en caché de la bandeja de entrada (INBOX).
+1. Muestra **de inmediato** los mensajes en caché de la bandeja de entrada (INBOX) y el **árbol de carpetas** guardado de la cuenta activa.
 2. **Se conecta al servidor** y descarga cabeceras de correo **nuevo** (barra de progreso en la parte inferior).
 3. Si tienes varias cuentas y la sincronización en segundo plano está activa, actualiza también el INBOX de las demás cuentas.
 
@@ -29,9 +29,10 @@ La ventana permanece usable mientras conecta; no hace falta pulsar «Actualizar�
 6. Navega por el **árbol de carpetas**; **doble clic** en un mensaje (o `Enter`) para abrirlo.
 7. Usa la **barra de búsqueda** y los filtros sobre la lista de mensajes.
 8. En el visor: **Mostrar imágenes remotas** (si están bloqueadas), **Traducir**, **Modo lectura** o **Texto plano** según necesites.
-9. **Redactar** (`Ctrl+N`) o **Responder** (`Ctrl+R`) con el editor enriquecido y plantillas.
-10. Clic derecho en el listado, en una carpeta o en la bandeja del sistema para más acciones.
-11. Ajusta el comportamiento en **Archivo → Preferencias…** (`Ctrl+,`): sync, imágenes, idioma de traducción, plantillas…
+9. **Redactar** (`Ctrl+N`) o **Responder** (`Ctrl+R`) con el editor enriquecido y plantillas. Marca **Solicitar acuse de recibo** si quieres pedir confirmación de lectura al destinatario (no todos los clientes lo admiten). En **Preferencias → General → Redacción** puedes dejar esa casilla marcada por defecto.
+10. Si un mensaje recibido pide acuse de lectura, el visor muestra un aviso con **Enviar acuse** o **Descartar**.
+11. Clic derecho en el listado, en una carpeta o en la bandeja del sistema para más acciones.
+12. Ajusta el comportamiento en **Archivo → Preferencias…** (`Ctrl+,`): sync, imágenes, idioma de traducción, plantillas…
 
 ## Selección múltiple
 

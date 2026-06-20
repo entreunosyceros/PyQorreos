@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS message_bodies (
     fetched_at TEXT NOT NULL,
     PRIMARY KEY (account_id, folder, uid)
 );
+
+CREATE TABLE IF NOT EXISTS account_folders (
+    account_id TEXT PRIMARY KEY,
+    folders_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -121,9 +127,69 @@ class MailCache:
         for col, ddl in (
             ("attachments_json", "TEXT NOT NULL DEFAULT '[]'"),
             ("message_id", "TEXT NOT NULL DEFAULT ''"),
+            ("read_receipt_to", "TEXT NOT NULL DEFAULT ''"),
         ):
             if col not in body_cols:
                 conn.execute(f"ALTER TABLE message_bodies ADD COLUMN {col} {ddl}")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_folders (
+                account_id TEXT PRIMARY KEY,
+                folders_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+
+    def save_account_folders(self, account_id: str, folders: list[str]) -> None:
+        """Guarda la lista de carpetas IMAP conocidas para una cuenta."""
+        names = sorted({f.strip() for f in folders if f and f.strip()})
+        if "INBOX" not in names:
+            names.insert(0, "INBOX")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO account_folders
+                (account_id, folders_json, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    account_id,
+                    json.dumps(names, ensure_ascii=False),
+                    datetime.now().isoformat(),
+                ),
+            )
+
+    def load_account_folders(self, account_id: str) -> list[str]:
+        """Devuelve carpetas en caché (lista guardada o inferida de mensajes locales)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT folders_json FROM account_folders WHERE account_id = ?",
+                (account_id,),
+            ).fetchone()
+        folders: list[str] = []
+        if row and row["folders_json"]:
+            try:
+                raw = json.loads(row["folders_json"])
+                if isinstance(raw, list):
+                    folders = [str(name) for name in raw if str(name).strip()]
+            except (json.JSONDecodeError, TypeError):
+                folders = []
+        if not folders:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT folder FROM messages WHERE account_id = ?
+                    UNION
+                    SELECT DISTINCT folder FROM message_bodies WHERE account_id = ?
+                    """,
+                    (account_id, account_id),
+                ).fetchall()
+            folders = [row["folder"] for row in rows if row["folder"]]
+        names = sorted({name.strip() for name in folders if name and name.strip()})
+        if "INBOX" not in names:
+            names.insert(0, "INBOX")
+        return names
 
     def clear_folder(self, account_id: str, folder: str) -> None:
         """Elimina todos los mensajes en caché de una carpeta."""
@@ -362,8 +428,9 @@ class MailCache:
                 """
                 INSERT OR REPLACE INTO message_bodies
                 (account_id, folder, uid, subject, sender, recipients, date_iso,
-                 body_text, body_html, category, attachments_json, message_id, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 body_text, body_html, category, attachments_json, message_id,
+                 read_receipt_to, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     account_id,
@@ -378,6 +445,7 @@ class MailCache:
                     message.category.value,
                     att_json,
                     message.message_id,
+                    message.read_receipt_to or "",
                     datetime.now().isoformat(),
                 ),
             )
@@ -389,7 +457,8 @@ class MailCache:
             row = conn.execute(
                 """
                 SELECT uid, subject, sender, recipients, date_iso,
-                       body_text, body_html, category, attachments_json, message_id
+                       body_text, body_html, category, attachments_json, message_id,
+                       read_receipt_to
                 FROM message_bodies
                 WHERE account_id = ? AND folder = ? AND uid = ?
                 """,
@@ -422,6 +491,7 @@ class MailCache:
             category=MailCategory(row["category"]),
             attachments=attachments,
             message_id=row["message_id"] or "",
+            read_receipt_to=row["read_receipt_to"] or "",
         )
 
     def delete_message(self, account_id: str, folder: str, uid: str) -> None:
@@ -444,5 +514,9 @@ class MailCache:
             )
             conn.execute(
                 "DELETE FROM message_bodies WHERE account_id = ?",
+                (account_id,),
+            )
+            conn.execute(
+                "DELETE FROM account_folders WHERE account_id = ?",
                 (account_id,),
             )

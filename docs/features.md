@@ -35,7 +35,7 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 ## Bandeja y sincronización
 
 - Vista de tres paneles: carpetas | lista de mensajes | lectura
-- **Al iniciar la aplicación**: muestra la caché local de INBOX al instante y descarga cabeceras nuevas del servidor en segundo plano
+- **Al iniciar la aplicación**: muestra la caché local de INBOX al instante, el **árbol de carpetas** de la última sesión (o al menos INBOX) y descarga cabeceras nuevas del servidor en segundo plano
 - Árbol de carpetas con iconos SVG y contador de no leídos
 - Crear carpetas y subcarpetas en el servidor IMAP; eliminar carpetas de usuario (p. ej. restos de otros clientes como `Mailspring`)
 - Sincronización incremental (solo descarga mensajes nuevos)
@@ -88,6 +88,8 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - **Plantillas** de texto rápido (pestaña «Plantillas» en Preferencias; menú en el editor al redactar)
 - Aviso si el cuerpo menciona adjuntos pero no hay ninguno seleccionado
 - Adjuntar archivos al enviar
+- **Acuse de recibo** opcional al enviar (cabecera `Disposition-Notification-To`; el cliente del destinatario decide si responde); preferencia para activarlo por defecto al redactar
+- Aviso en el lector cuando un mensaje recibido solicita acuse, con botones **Enviar acuse** / **Descartar**
 - Envío HTML + texto plano por SMTP
 - Borradores precargados al responder o reenviar (cita HTML del mensaje original)
 - Guardar borrador en la carpeta Drafts del servidor
