@@ -172,11 +172,6 @@ def get_oauth_token(account_id: str) -> OAuthToken | None:
     return _load_legacy_token(account_id)
 
 
-def store_oauth_token(account_id: str, token: OAuthToken) -> None:
-    """Alias de store_oauth_tokens (compatibilidad)."""
-    store_oauth_tokens(account_id, token)
-
-# Elimina el token de autenticación OAuth2
 def delete_oauth_token(account_id: str) -> None:
     for key in (
         oauth_refresh_key(account_id),
@@ -466,25 +461,3 @@ class OAuthFlow:
                 "Vuelve a autorizar (en Google usa prompt=consent)."
             )
         return token
-
-# Atajo síncrono (bloquea el hilo llamador). Preferir OAuthFlowWorker en la UI.
-def run_oauth_authorization(
-    provider_key: str,
-    account_id: str,
-    *,
-    open_browser: Callable[[str], None] | None = None,
-    process_events: Callable[[], None] | None = None,
-    timeout_sec: int = 300,
-) -> OAuthToken:
-    """
-    Atajo síncrono (bloquea el hilo llamador). Preferir OAuthFlowWorker en la UI.
-    """
-    del process_events  # compatibilidad con llamadas antiguas
-    flow = OAuthFlow(
-        provider_key,
-        open_browser=open_browser,
-        timeout_sec=timeout_sec,
-    )
-    token = flow.run_flow()
-    store_oauth_tokens(account_id, token)
-    return token

@@ -57,6 +57,15 @@ def has_unsubscribe_option(parsed: dict[str, str | bool | None]) -> bool:
     return bool(parsed.get("url") or parsed.get("mailto"))
 
 
+def message_has_unsubscribe(
+    *,
+    unsubscribe_url: str | None,
+    unsubscribe_mailto: str | None,
+) -> bool:
+    """Indica si un mensaje ya parseado ofrece desuscripción."""
+    return bool(unsubscribe_url or unsubscribe_mailto)
+
+
 def perform_unsubscribe(
     *,
     url: str | None,

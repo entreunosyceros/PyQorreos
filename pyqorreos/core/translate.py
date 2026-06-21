@@ -31,11 +31,7 @@ TRANSLATION_LANGUAGES: list[tuple[str, str]] = [
 
 _DEFAULT_LANGUAGE = "es"
 
-# Idioma por defecto para la traducción.
-def default_target_language() -> str:
-    return _DEFAULT_LANGUAGE
 
-# Obtiene el nombre del idioma en español.
 def language_label(code: str) -> str:
     for lang_code, label in TRANSLATION_LANGUAGES:
         if lang_code == code:

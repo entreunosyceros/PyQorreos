@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 
 TRASH_KEYWORDS = ("trash", "deleted", "papelera", "bin", "elementos eliminados")
 DRAFTS_KEYWORDS = ("draft", "borrador")
-SPAM_KEYWORDS = ("spam", "junk", "no deseado")
 
 # Carpetas que no deben poder eliminarse desde el cliente.
 _PROTECTED_PREFIXES = ("[gmail]", "[google mail]")
@@ -134,14 +133,6 @@ def find_trash_folder(folders: list[str]) -> str | None:
             return name
     for name in folders:
         if folder_leaf(name) in ("trash", "deleted items", "papelera"):
-            return name
-    return None
-
-
-def find_spam_folder(folders: list[str]) -> str | None:
-    for name in folders:
-        leaf = folder_leaf(name)
-        if any(k in leaf for k in SPAM_KEYWORDS):
             return name
     return None
 

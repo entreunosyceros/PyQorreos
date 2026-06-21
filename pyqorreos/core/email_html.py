@@ -98,6 +98,218 @@ def _normalize_remote_url(url: str) -> str:
         return "https:" + url
     return url
 
+
+def _resolve_remote_url(url: str, referer: str) -> str:
+    url = _normalize_remote_url(url)
+    if (
+        referer
+        and not _is_remote_image_url(url)
+        and not url.lower().startswith("cid:")
+        and not url.startswith("data:")
+    ):
+        base = referer.rstrip("/") + "/"
+        url = urllib.parse.urljoin(base, url)
+    return url
+
+
+def extract_remote_image_urls(html: str, *, referer: str = "") -> list[str]:
+    """
+    Lista URLs http(s) de imágenes remotas en HTML bloqueado o ya desbloqueado.
+
+    El orden se conserva; no hay duplicados.
+    """
+    if not html.strip():
+        return []
+    seen: set[str] = set()
+    urls: list[str] = []
+
+    def add(raw: str) -> None:
+        resolved = _resolve_remote_url(raw, referer)
+        if not _is_remote_image_url(resolved):
+            return
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        urls.append(resolved)
+
+    for match in re.finditer(
+        r"""data-blocked-(?:src|background|srcset)\s*=\s*["']([^"']+)["']""",
+        html,
+        re.IGNORECASE,
+    ):
+        value = unescape(match.group(1))
+        attr = match.group(0).lower()
+        if "srcset" in attr:
+            for part_url, _desc in _parse_srcset(value):
+                add(part_url)
+        else:
+            add(value)
+
+    for match in _BLOCKED_CSS_URL.finditer(html):
+        add(unescape(match.group(1)))
+
+    for match in _IMG_TAG.finditer(html):
+        tag = match.group(0)
+        for attr_match in _ATTR_URL.finditer(tag):
+            _attr, url = attr_match.group(1).lower(), attr_match.group(2)
+            if _is_blocked_placeholder(url):
+                continue
+            if _attr == "srcset":
+                for part_url, _desc in _parse_srcset(url):
+                    add(part_url)
+            else:
+                add(url)
+
+    for match in _CSS_URL.finditer(html):
+        url = match.group(1)
+        if _is_blocked_placeholder(url):
+            continue
+        add(url)
+
+    for match in _BG_ATTR.finditer(html):
+        url = match.group(2)
+        if not _is_blocked_placeholder(url):
+            add(url)
+
+    return urls
+
+
+def download_remote_image(
+    url: str,
+    *,
+    referer: str = "",
+) -> tuple[bytes, str] | None:
+    """Descarga una imagen remota. Devuelve (bytes, content_type) o None."""
+    url = _resolve_remote_url(url, referer)
+    if not _is_remote_image_url(url):
+        return None
+    try:
+        headers = {
+            "User-Agent": _USER_AGENT,
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        }
+        if referer:
+            headers["Referer"] = referer.rstrip("/") + "/"
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = response.read(MAX_IMAGE_BYTES)
+            content_type = response.headers.get_content_type() or "image/jpeg"
+        if not data:
+            return None
+        return data, content_type
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def apply_data_url_to_html(html: str, remote_url: str, data_url: str) -> str:
+    """Sustituye en el HTML una URL remota por su data URL (una imagen)."""
+    if not data_url.strip():
+        return html
+    target = _normalize_remote_url(remote_url)
+
+    def matches_url(raw: str) -> bool:
+        return _normalize_remote_url(raw) == target
+
+    def patch_img(tag: str) -> str:
+        blocked = re.search(
+            r"""data-blocked-src\s*=\s*["']([^"']+)["']""",
+            tag,
+            re.IGNORECASE,
+        )
+        if blocked and matches_url(blocked.group(1)):
+            tag = _replace_attr_url(tag, "src", data_url)
+            tag = re.sub(
+                r"""\s*data-blocked-src\s*=\s*["'][^"']*["']""",
+                "",
+                tag,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            return tag
+        for attr_match in list(_ATTR_URL.finditer(tag)):
+            attr, url = attr_match.group(1).lower(), attr_match.group(2)
+            if attr == "srcset":
+                continue
+            if matches_url(url) and not _is_blocked_placeholder(url):
+                tag = _replace_attr_url(tag, attr, data_url)
+        srcset_match = _SRCSET_ATTR.search(tag)
+        if srcset_match:
+            items: list[tuple[str, str]] = []
+            changed = False
+            for part_url, descriptor in _parse_srcset(srcset_match.group(1)):
+                if matches_url(part_url):
+                    items.append((data_url, descriptor))
+                    changed = True
+                else:
+                    items.append((part_url, descriptor))
+            if changed:
+                tag = _SRCSET_ATTR.sub(
+                    f'srcset="{_format_srcset(items)}"', tag, count=1
+                )
+        blocked_srcset = re.search(
+            r"""data-blocked-srcset\s*=\s*["']([^"']+)["']""",
+            tag,
+            re.IGNORECASE,
+        )
+        if blocked_srcset:
+            items = []
+            changed = False
+            for part_url, descriptor in _parse_srcset(blocked_srcset.group(1)):
+                if matches_url(part_url):
+                    items.append((data_url, descriptor))
+                    changed = True
+                else:
+                    items.append((part_url, descriptor))
+            if changed:
+                tag = _SRCSET_ATTR.sub(
+                    f'srcset="{_format_srcset(items)}"', tag, count=1
+                )
+                tag = re.sub(
+                    r"""\s*data-blocked-srcset\s*=\s*["'][^"']*["']""",
+                    "",
+                    tag,
+                    count=1,
+                    flags=re.IGNORECASE,
+                )
+        return tag
+
+    html = _IMG_TAG.sub(lambda m: patch_img(m.group(0)), html)
+
+    def patch_bg(tag: str) -> str:
+        blocked = re.search(
+            r"""data-blocked-background\s*=\s*["']([^"']+)["']""",
+            tag,
+            re.IGNORECASE,
+        )
+        if blocked and matches_url(blocked.group(1)):
+            tag = _BG_ATTR.sub(f'background="{data_url}"', tag, count=1)
+            tag = re.sub(
+                r"""\s*data-blocked-background\s*=\s*["'][^"']*["']""",
+                "",
+                tag,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+        return tag
+
+    html = _TAG_WITH_BG.sub(lambda m: patch_bg(m.group(0)), html)
+
+    def patch_css(match: re.Match[str]) -> str:
+        url = unescape(match.group(1))
+        if matches_url(url):
+            return f'url("{data_url}")'
+        blocked = _BLOCKED_CSS_URL.search(match.group(0))
+        if blocked and matches_url(unescape(blocked.group(1))):
+            return f'url("{data_url}")'
+        return match.group(0)
+
+    html = _CSS_URL.sub(patch_css, html)
+    html = _BLOCKED_CSS_URL.sub(
+        lambda m: f'url("{data_url}")' if matches_url(unescape(m.group(1))) else m.group(0),
+        html,
+    )
+    return html
+
 # Verifica si la URL es de una imagen remota.
 def _is_remote_image_url(url: str) -> bool:
     normalized = _normalize_remote_url(url)
@@ -362,14 +574,7 @@ class _RemoteImageEmbedder:
         self._referer = referer.rstrip("/") + "/" if referer else ""
 
     def embed(self, url: str) -> str:
-        url = _normalize_remote_url(url)
-        if (
-            self._referer
-            and not _is_remote_image_url(url)
-            and not url.lower().startswith("cid:")
-            and not url.startswith("data:")
-        ):
-            url = urllib.parse.urljoin(self._referer, url)
+        url = _resolve_remote_url(url, self._referer)
         if not url or url.startswith("data:"):
             return url
         if url.lower().startswith("cid:"):
@@ -380,24 +585,15 @@ class _RemoteImageEmbedder:
             return self._cache[url]
         if self._count >= self._max_count:
             return url
-        try:
-            headers = {
-                "User-Agent": _USER_AGENT,
-                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-            }
-            if self._referer:
-                headers["Referer"] = self._referer
-            request = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(request, timeout=15) as response:
-                data = response.read(MAX_IMAGE_BYTES)
-                content_type = response.headers.get_content_type() or "image/jpeg"
+        from pyqorreos.core.remote_image_cache import resolve_remote_image
+
+        resolved = resolve_remote_image(url, referer=self._referer)
+        if resolved:
+            data_url, _from_cache = resolved
             self._count += 1
-            encoded = base64.b64encode(data).decode("ascii")
-            data_url = f"data:{content_type};base64,{encoded}"
             self._cache[url] = data_url
             return data_url
-        except (urllib.error.URLError, OSError, ValueError):
-            return url
+        return url
 
 # Recoge las imágenes cid en un mensaje.
 def _collect_cid_images(msg: email.message.Message) -> dict[str, str]:
@@ -569,12 +765,7 @@ def prepare_html_for_display(
     html = sanitize_email_html_for_viewer(html)
     return inject_link_safety_overlay(html)
 
-# Descarga imágenes http(s) en un HTML ya preparado (sin volver a leer IMAP).
-def embed_remote_images_in_html(html: str, referer: str = "") -> str:
-    """Descarga imágenes http(s) en un HTML ya preparado (sin volver a leer IMAP)."""
-    return load_remote_images_in_html(html, referer=referer)
 
-# Obtiene la URL base de un mensaje.
 def base_url_for_message(sender: str) -> str:
     return _base_url_from_sender(sender)
 

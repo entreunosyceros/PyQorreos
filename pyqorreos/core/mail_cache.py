@@ -387,22 +387,6 @@ class MailCache:
             self._summary_from_row(row, folder=default_folder) for row in rows
         ]
 
-    def search_summaries(
-        self,
-        account_id: str,
-        folder: str,
-        query: str,
-        *,
-        unread_only: bool = False,
-    ) -> list[MailSummary]:
-        """Búsqueda simple en asunto y remitente (caché local)."""
-        return self.query_summaries(
-            account_id,
-            folder,
-            query=query,
-            unread_only=unread_only,
-        )
-
     def update_category(
         self, account_id: str, folder: str, uid: str, category: MailCategory
     ) -> None:

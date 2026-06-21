@@ -12,13 +12,13 @@ import re
 from dataclasses import dataclass
 from email.utils import getaddresses, parseaddr
 
+from pyqorreos.core.email_html import html_to_plain_text
 from pyqorreos.core.mail_service import MailMessage
 
 _BODY_FRAGMENT = re.compile(
     r"<body[^>]*>(.*)</body>",
     re.DOTALL | re.IGNORECASE,
 )
-_STRIP_TAGS = re.compile(r"<[^>]+>")
 
 
 @dataclass
@@ -78,15 +78,6 @@ def _extract_html_body(html: str) -> str:
         return match.group(1).strip()
     return html
 
-# Texto plano aproximado cuando no hay parte text/plain.
-def _html_to_plain_fallback(html: str) -> str:
-    """Texto plano aproximado cuando no hay parte text/plain."""
-    text = _STRIP_TAGS.sub(" ", html)
-    text = html_module.unescape(text)
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return re.sub(r" +", " ", text).strip()
-
 # Cita el contenido de un mensaje en HTML.
 def _quoted_content_html(message: MailMessage) -> str:
     if message.body_html.strip():
@@ -106,7 +97,7 @@ def _quote_plain(message: MailMessage) -> str:
     if message.body_text.strip():
         body = message.body_text
     elif message.body_html.strip():
-        body = _html_to_plain_fallback(message.body_html)
+        body = html_to_plain_text(message.body_html)
     else:
         body = "(Sin contenido)"
     quoted = "\n".join(f"> {line}" for line in body.splitlines())

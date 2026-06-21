@@ -98,6 +98,26 @@ class AddressBook:
                 contacts.append(contact)
         return _sort_contacts(contacts)
 
+    def is_loaded(self) -> bool:
+        return self._loaded
+
+    def load_from_disk(self) -> None:
+        """Carga contactos desde JSON en el hilo actual."""
+        self._ensure_loaded()
+
+    @classmethod
+    def read_contacts_from_disk(cls) -> list[AddressContact]:
+        """Lee contactos del disco sin modificar instancias en memoria."""
+        return cls._read_from_disk()
+
+    def set_contacts(self, contacts: list[AddressContact]) -> None:
+        self._contacts = _sort_contacts(list(contacts))
+        self._loaded = True
+
+    def find_by_id(self, contact_id: str) -> AddressContact | None:
+        self._ensure_loaded()
+        return next((c for c in self._contacts if c.id == contact_id), None)
+
     def contacts(self) -> list[AddressContact]:
         self._ensure_loaded()
         return list(self._contacts)

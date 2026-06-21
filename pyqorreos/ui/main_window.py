@@ -8,7 +8,6 @@ Toda comunicación con el servidor se delega a workers en segundo plano.
 from __future__ import annotations
 
 from datetime import datetime
-from email.utils import parseaddr
 import subprocess
 import tempfile
 from pathlib import Path
@@ -21,7 +20,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -32,7 +30,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QSplitter,
     QStatusBar,
@@ -48,6 +45,7 @@ from PySide6.QtWidgets import (
 from pyqorreos.core.account import MailAccount
 from pyqorreos.core.address_book import get_address_book, parse_sender_address
 from pyqorreos.core.classifier import MailCategory, extract_email_address
+from pyqorreos.core.compose_utils import format_bytes
 from pyqorreos.core.folder_utils import (
     can_delete_folder,
     find_drafts_folder,
@@ -56,6 +54,7 @@ from pyqorreos.core.folder_utils import (
     is_drafts_folder,
     is_trash_folder,
 )
+from pyqorreos.core.list_unsubscribe import message_has_unsubscribe
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.mail_service import MailMessage, MailService, MailSummary, normalize_mail_datetime
 from pyqorreos.core.oauth import AuthMethod, detect_oauth_provider, oauth_not_configured_message
@@ -82,6 +81,7 @@ from pyqorreos.ui.message_viewer import MessageViewer
 from pyqorreos.ui.notification_utils import format_new_mail_notification
 from pyqorreos.ui.openpgp_keys_dialog import OpenPgpKeysDialog
 from pyqorreos.ui.preferences_dialog import PreferencesDialog
+from pyqorreos.ui.remote_image_loader import RemoteImageLoader
 from pyqorreos.ui.system_tray import SystemTray
 from pyqorreos.ui.theme import (
     apply_app_theme,
@@ -99,7 +99,6 @@ from pyqorreos.ui.workers import (
     DeleteMessageWorker,
     DeleteMessagesWorker,
     EmptyFolderWorker,
-    EnhanceHtmlWorker,
     ExportFolderWorker,
     ExportMessageWorker,
     FetchAttachmentWorker,
@@ -107,7 +106,6 @@ from pyqorreos.ui.workers import (
     FolderUnreadWorker,
     LoadFolderWorker,
     MoveMessagesWorker,
-    SaveDraftWorker,
     SendReadReceiptWorker,
     SetSeenWorker,
     StorageQuotaWorker,
@@ -139,12 +137,6 @@ def _font_normal(base: QFont | None = None, point_size: int = TABLE_FONT_SIZE) -
     return font
 
 
-def _sender_address(sender: str) -> str:
-    """Extrae la dirección de correo de una cabecera From."""
-    _name, addr = parseaddr(sender)
-    return addr
-
-
 def _selected_summary(
     uid: str | None, messages: list[MailSummary]
 ) -> MailSummary | None:
@@ -168,7 +160,7 @@ class MainWindow(QMainWindow):
         self.accounts: list[MailAccount] = self.settings.load_accounts()
         self.current_account: MailAccount | None = None
         self.mail_service: MailService | None = None
-        self._workers: list = []
+        self._workers: list[QThread] = []
         self._quitting = False
         self._tray: SystemTray | None = None
         self._tray_menu: QMenu | None = None
@@ -183,7 +175,10 @@ class MainWindow(QMainWindow):
         self._pending_fetch_uid: str | None = None
         self._fetch_generation = 0
         self._reader_buttons: list[QPushButton] = []
-        self._enhance_worker: EnhanceHtmlWorker | None = None
+        self._remote_image_loader = RemoteImageLoader(self)
+        self._remote_image_loader.image_loaded.connect(self._on_remote_image_loaded)
+        self._remote_image_loader.finished.connect(self._on_remote_images_finished)
+        self._remote_image_loader.progress.connect(self._on_remote_images_progress)
         self._pending_enhance_uid: str | None = None
         self._enhance_generation = 0
         self._explicit_image_load = False
@@ -1050,21 +1045,17 @@ class MainWindow(QMainWindow):
             action.setEnabled(False)
 
     def _exec_modal(self, dialog: QDialog) -> int:
-        """Muestra un diálogo modal pausando sync en segundo plano."""
+        """Muestra un diálogo modal pausando el polling (sin reiniciar hilos IMAP)."""
         pause_bg_sync = (
             self._prefs.background_sync_enabled and bool(self.accounts)
         )
         if pause_bg_sync:
-            self._background_sync.stop()
+            self._background_sync.pause_for_modal()
         try:
             return dialog.exec()
         finally:
-            if pause_bg_sync and self.accounts:
-                self._background_sync.set_accounts(
-                    self.accounts,
-                    self.current_account.id if self.current_account else None,
-                )
-                self._background_sync.start()
+            if pause_bg_sync:
+                self._background_sync.resume_after_modal()
 
     def _ensure_reader_actions_layout(self) -> None:
         """Dos filas de botones que reparten el ancho disponible (sin scroll)."""
@@ -1072,7 +1063,7 @@ class MainWindow(QMainWindow):
             return
         outer = QVBoxLayout(self.reader_actions)
         outer.setContentsMargins(0, 4, 0, 8)
-        outer.setSpacing(6)
+        outer.setSpacing(12)
         self._reader_row1 = QHBoxLayout()
         self._reader_row1.setSpacing(6)
         self._reader_row2 = QHBoxLayout()
@@ -1124,7 +1115,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "reader_actions"):
             return
         self.reader_actions.adjustSize()
-        height = max(self.reader_actions.sizeHint().height(), 96)
+        height = max(self.reader_actions.sizeHint().height(), 104)
         self.reader_actions.setFixedHeight(height)
 
     @staticmethod
@@ -1161,20 +1152,9 @@ class MainWindow(QMainWindow):
             pass
 
     def _detach_enhance_worker(self) -> None:
-        """Ignora el resultado de una mejora HTML en curso (p. ej. al cambiar de mensaje)."""
+        """Cancela la carga incremental de imágenes remotas."""
         self._pending_enhance_uid = None
-        worker = self._enhance_worker
-        self._enhance_worker = None
-        if worker is None:
-            return
-        try:
-            worker.signals.finished.disconnect(self._on_html_enhanced)
-        except (RuntimeError, TypeError):
-            pass
-        try:
-            worker.signals.error.disconnect(self._on_enhance_error)
-        except (RuntimeError, TypeError):
-            pass
+        self._remote_image_loader.invalidate()
 
     def _on_message_selection_changed(self) -> None:
         selected = self._selected_message_uid()
@@ -1267,7 +1247,10 @@ class MainWindow(QMainWindow):
                 can_unsub = bool(
                     loaded
                     and msg
-                    and (msg.unsubscribe_url or msg.unsubscribe_mailto)
+                    and message_has_unsubscribe(
+                        unsubscribe_url=msg.unsubscribe_url,
+                        unsubscribe_mailto=msg.unsubscribe_mailto,
+                    )
                 )
                 btn.setEnabled(can_unsub)
                 self._act_unsubscribe.setEnabled(can_unsub)
@@ -1361,8 +1344,9 @@ class MainWindow(QMainWindow):
         delete_action.setShortcut(self._act_delete.shortcut())
         delete_action.triggered.connect(self._act_delete.trigger)
 
-        if loaded and self._current_message and (
-            self._current_message.unsubscribe_url or self._current_message.unsubscribe_mailto
+        if loaded and self._current_message and message_has_unsubscribe(
+            unsubscribe_url=self._current_message.unsubscribe_url,
+            unsubscribe_mailto=self._current_message.unsubscribe_mailto,
         ):
             unsub_action = menu.addAction("Darse de baja del boletín")
             unsub_action.triggered.connect(self._unsubscribe_current_message)
@@ -1566,48 +1550,65 @@ class MainWindow(QMainWindow):
             toolbar.setContextMenuPolicy(prevent)
 
     def _track_worker(self, worker: QThread) -> None:
-        """Registra un hilo y lo libera al terminar (evita acumulación de QThread)."""
+        """Registra un hilo; la ref. Python se mantiene hasta destroyed."""
         if worker in self._workers:
             return
         self._workers.append(worker)
-        worker.finished.connect(lambda w=worker: self._release_worker(w))
+        worker.finished.connect(worker.deleteLater)
+        worker.destroyed.connect(lambda *_a, w=worker: self._on_worker_destroyed(w))
 
-    def _release_worker(self, worker: QThread) -> None:
+    def _on_worker_destroyed(self, worker: QThread) -> None:
+        if self._load_folder_worker is worker:
+            self._load_folder_worker = None
         try:
             self._workers.remove(worker)
         except ValueError:
-            return
-        worker.deleteLater()
+            pass
 
-    def _disconnect_thread_signals(self, thread: QThread | None) -> None:
-        """Evita deadlock al esperar hilos desde el hilo de la interfaz."""
+    @staticmethod
+    def _thread_object_alive(thread: QThread | None) -> bool:
+        if thread is None:
+            return False
+        try:
+            from shiboken6 import isValid
+
+            return isValid(thread)
+        except ImportError:
+            try:
+                thread.isRunning()
+                return True
+            except RuntimeError:
+                return False
+
+    def _disconnect_worker_signals(self, thread: QThread | None) -> None:
+        """Desconecta señales de trabajo; no toca QThread.finished (cleanup)."""
         if thread is None:
             return
         signals = getattr(thread, "signals", None)
-        if signals is not None:
-            for name in (
-                "finished",
-                "error",
-                "batch_ready",
-                "progress",
-            ):
-                if not hasattr(signals, name):
-                    continue
-                try:
-                    getattr(signals, name).disconnect()
-                except (RuntimeError, TypeError):
-                    pass
-        try:
-            thread.finished.disconnect()
-        except (RuntimeError, TypeError):
-            pass
+        if signals is None:
+            return
+        for name in (
+            "finished",
+            "error",
+            "batch_ready",
+            "progress",
+        ):
+            if not hasattr(signals, name):
+                continue
+            try:
+                getattr(signals, name).disconnect()
+            except (RuntimeError, TypeError):
+                pass
+
+    def _disconnect_thread_signals(self, thread: QThread | None) -> None:
+        """Evita deadlock al esperar hilos desde el hilo de la interfaz."""
+        self._disconnect_worker_signals(thread)
 
     def _stop_thread(self, thread: QThread | None, *, wait_ms: int = 500) -> None:
         if thread is None or not thread.isRunning():
             return
-        self._disconnect_thread_signals(thread)
+        self._disconnect_worker_signals(thread)
         if wait_ms <= 0:
-            thread.terminate()
             return
         thread.wait(wait_ms)
         if thread.isRunning():
@@ -1630,11 +1631,11 @@ class MainWindow(QMainWindow):
         self._background_sync.stop(wait_ms=0 if fast else 5000)
 
         self._stop_load_folder_worker(wait_ms=wait_ms)
+        self._remote_image_loader.invalidate()
 
         for attr in (
             "_connect_worker",
             "_message_fetch_worker",
-            "_enhance_worker",
             "_translate_worker",
             "_folder_unread_worker",
         ):
@@ -1643,8 +1644,6 @@ class MainWindow(QMainWindow):
 
         for worker in list(self._workers):
             self._stop_thread(worker, wait_ms=wait_ms)
-            self._release_worker(worker)
-        self._workers.clear()
 
         try:
             self._background_sync.signals.new_mail.disconnect(self._on_background_new_mail)
@@ -2120,14 +2119,18 @@ class MainWindow(QMainWindow):
             self._connect_worker = None
 
     def _stop_load_folder_worker(self, *, wait_ms: int = 500) -> None:
-        """Detiene la carga de caché local sin tocar objetos Qt ya liberados."""
+        """Invalida la carga de caché local; el hilo termina en segundo plano."""
         self._load_folder_generation += 1
         worker = self._load_folder_worker
         self._load_folder_worker = None
-        if worker is None:
+        if worker is None or not self._thread_object_alive(worker):
             return
-        self._disconnect_thread_signals(worker)
-        self._stop_thread(worker, wait_ms=wait_ms)
+        self._disconnect_worker_signals(worker)
+        if wait_ms > 0 and worker.isRunning():
+            worker.wait(wait_ms)
+            if worker.isRunning():
+                worker.terminate()
+                worker.wait(300)
 
     def _preload_cached_folders(self, account_id: str) -> None:
         """Muestra el árbol de carpetas desde caché antes de conectar por IMAP."""
@@ -2156,6 +2159,7 @@ class MainWindow(QMainWindow):
         )
         worker.signals.error.connect(lambda _msg: None)
         worker.start()
+        self._track_worker(worker)
 
     def _on_startup_cache_preloaded(
         self,
@@ -2200,12 +2204,7 @@ class MainWindow(QMainWindow):
         if not auth_secret:
             return
         if self._folder_unread_worker and self._folder_unread_worker.isRunning():
-            try:
-                self._folder_unread_worker.signals.finished.disconnect(
-                    self._on_folder_unread_counts
-                )
-            except (RuntimeError, TypeError):
-                pass
+            return
         worker = FolderUnreadWorker(
             self.current_account, auth_secret, self._folder_names
         )
@@ -2458,6 +2457,7 @@ class MainWindow(QMainWindow):
                 )
             )
             load_worker.start()
+            self._track_worker(load_worker)
 
         self.btn_cancel_sync.setVisible(True)
         self.sync_progress.setVisible(False)
@@ -3274,66 +3274,174 @@ class MainWindow(QMainWindow):
         """Descarga imágenes remotas en segundo plano sin bloquear la apertura."""
         if self._prefs.block_remote_images:
             return
-        if (
-            self._safe_worker_running(self._enhance_worker)
-            and self._pending_enhance_uid == message.uid
-        ):
-            return
-        self._detach_enhance_worker()
-        generation = self._enhance_generation
-        self._pending_enhance_uid = message.uid
-        worker = EnhanceHtmlWorker(
-            self.mail_service,
-            message.uid,
-            message.body_html,
-            self._current_folder,
-        )
-        worker.signals.finished.connect(
-            lambda payload, g=generation: self._on_html_enhanced(payload, g)
-        )
-        worker.start()
-        self._enhance_worker = worker
-        self._track_worker(worker)
+        self._start_remote_image_load(message, explicit=False)
 
     def _load_remote_images_for_current(self) -> None:
         if not self._current_message or not self._current_message.body_html:
             return
-        uid = self._current_message.uid
+        self._start_remote_image_load(self._current_message, explicit=True)
+
+    def _start_remote_image_load(
+        self, message: MailMessage, *, explicit: bool
+    ) -> None:
+        from pyqorreos.core.email_html import (
+            base_url_for_message,
+            extract_remote_image_urls,
+        )
+        from pyqorreos.core.remote_image_cache import get_remote_image_cache
+
+        uid = message.uid
         if (
-            self._safe_worker_running(self._enhance_worker)
-            and self._pending_enhance_uid == uid
+            self._pending_enhance_uid == uid
+            and self._remote_image_loader.is_generation_active(
+                self._enhance_generation
+            )
         ):
             self.status_bar.showMessage("Cargando imágenes remotas…")
             return
+
+        referer = base_url_for_message(message.sender)
+        html = (
+            self.message_viewer.html_source_for_load()
+            if explicit
+            else message.body_html
+        )
+        urls = extract_remote_image_urls(html, referer=referer)
+        if not urls:
+            if explicit:
+                self.status_bar.showMessage("No hay imágenes remotas en este mensaje")
+            return
+
         self._detach_enhance_worker()
-        self._explicit_image_load = True
         generation = self._enhance_generation
         self._pending_enhance_uid = uid
-        self.status_bar.showMessage("Cargando imágenes remotas…")
-        worker = EnhanceHtmlWorker(
-            self.mail_service,
-            uid,
-            self.message_viewer.html_source_for_load(),
-            self._current_folder,
-        )
-        worker.signals.finished.connect(
-            lambda payload, g=generation: self._on_html_enhanced(payload, g)
-        )
-        worker.signals.error.connect(
-            lambda message, g=generation: self._on_enhance_error(message, g)
-        )
-        worker.start()
-        self._enhance_worker = worker
-        self._track_worker(worker)
+        self._explicit_image_load = explicit
+        if explicit:
+            self.message_viewer.mark_remote_images_unblocked()
 
-    def _on_enhance_error(self, message: str, generation: int | None = None) -> None:
-        if generation is not None and generation != self._enhance_generation:
+        cache = get_remote_image_cache()
+        pending: list[str] = []
+        cached = 0
+        for url in urls:
+            data_url = cache.get_data_url(url)
+            if data_url:
+                cached += 1
+                if self._current_message and self._current_message.uid == uid:
+                    self.message_viewer.apply_remote_image(url, data_url)
+            else:
+                pending.append(url)
+
+        if cached:
+            self._sync_message_html_from_viewer()
+
+        if pending:
+            if explicit or cached:
+                self.status_bar.showMessage(
+                    f"Cargando imágenes remotas… ({cached}/{len(urls)} listas)"
+                    if cached
+                    else "Cargando imágenes remotas…"
+                )
+            self._remote_image_loader.start(
+                pending, referer=referer, generation=generation
+            )
+        else:
+            self._finalize_remote_images(
+                uid, generation, loaded=len(urls), failed=0
+            )
+
+    def _on_remote_image_loaded(self, url: str, data_url: str) -> None:
+        if not self._current_message or not self._pending_enhance_uid:
+            return
+        if self._current_message.uid != self._pending_enhance_uid:
+            return
+        self.message_viewer.apply_remote_image(url, data_url)
+        self._sync_message_html_from_viewer()
+
+    def _on_remote_images_progress(self, done: int, total: int) -> None:
+        if not self._pending_enhance_uid:
+            return
+        if total > 0:
+            self.status_bar.showMessage(
+                f"Cargando imágenes remotas… ({done}/{total})"
+            )
+
+    def _on_remote_images_finished(self, loaded: int, failed: int) -> None:
+        uid = self._pending_enhance_uid
+        if not uid:
+            return
+        self._finalize_remote_images(
+            uid, self._enhance_generation, loaded=loaded, failed=failed
+        )
+
+    def _sync_message_html_from_viewer(self) -> None:
+        if not self._current_message:
+            return
+        html = self.message_viewer.stored_html
+        if html == self._current_message.body_html:
+            return
+        self._current_message = MailMessage(
+            uid=self._current_message.uid,
+            subject=self._current_message.subject,
+            sender=self._current_message.sender,
+            recipients=self._current_message.recipients,
+            date=self._current_message.date,
+            body_text=self._current_message.body_text,
+            body_html=html,
+            category=self._current_message.category,
+            attachments=self._current_message.attachments,
+            message_id=self._current_message.message_id,
+            in_reply_to=self._current_message.in_reply_to,
+            references=self._current_message.references,
+            unsubscribe_url=self._current_message.unsubscribe_url,
+            unsubscribe_mailto=self._current_message.unsubscribe_mailto,
+            one_click_unsubscribe=self._current_message.one_click_unsubscribe,
+            read_receipt_to=self._current_message.read_receipt_to,
+            pgp=self._current_message.pgp,
+        )
+
+    def _finalize_remote_images(
+        self,
+        uid: str,
+        generation: int,
+        *,
+        loaded: int,
+        failed: int,
+    ) -> None:
+        from pyqorreos.core.email_html import (
+            base_url_for_message,
+            count_blocked_image_placeholders,
+        )
+
+        if generation != self._enhance_generation:
+            return
+        if not self._current_message or self._current_message.uid != uid:
             return
         self._pending_enhance_uid = None
-        self._enhance_worker = None
+        explicit = self._explicit_image_load
         self._explicit_image_load = False
-        self.status_bar.showMessage("No se pudieron cargar las imágenes remotas")
-        QMessageBox.warning(self, "Imágenes remotas", message)
+
+        self._sync_message_html_from_viewer()
+        html = self._current_message.body_html
+        remaining = count_blocked_image_placeholders(html)
+
+        if self.current_account and html:
+            self.mail_cache.save_message_body(
+                self.current_account.id, self._current_folder, self._current_message
+            )
+
+        if explicit:
+            self.message_viewer.set_remote_load_finished(remaining > 0)
+
+        if failed > 0 or remaining > 0:
+            msg = "Imágenes remotas cargadas (algunas no disponibles)"
+        elif loaded > 0 or explicit:
+            msg = "Imágenes remotas cargadas"
+        elif explicit:
+            msg = "No hay imágenes remotas pendientes de cargar"
+        else:
+            msg = ""
+        if msg:
+            self.status_bar.showMessage(msg)
 
     def _message_body_for_translation(self, message: MailMessage) -> str:
         from pyqorreos.core.email_html import html_to_plain_text
@@ -3631,89 +3739,6 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Error al mover mensajes")
         QMessageBox.warning(self, "Error al mover", message)
 
-    def _on_html_enhanced(self, payload, generation: int | None = None) -> None:
-        uid, html = payload
-        if generation is not None and generation != self._enhance_generation:
-            return
-        if self._pending_enhance_uid != uid:
-            return
-        if not self._current_message or self._current_message.uid != uid:
-            return
-        self._pending_enhance_uid = None
-        self._enhance_worker = None
-        explicit = self._explicit_image_load
-        self._explicit_image_load = False
-        from pyqorreos.core.email_html import (
-            base_url_for_message,
-            count_blocked_image_placeholders,
-        )
-
-        old_html = self._current_message.body_html
-        old_blocked = count_blocked_image_placeholders(old_html)
-        new_blocked = count_blocked_image_placeholders(html)
-        improved = html != old_html or new_blocked < old_blocked
-
-        if not explicit and html == old_html:
-            if new_blocked > 0:
-                self.status_bar.showMessage(
-                    "No se pudieron descargar algunas imágenes remotas"
-                )
-            else:
-                self.status_bar.showMessage(
-                    "No hay imágenes remotas pendientes de cargar"
-                )
-            return
-
-        if explicit and not improved:
-            if new_blocked > 0:
-                self.message_viewer.show_html(
-                    html,
-                    base_url_for_message(self._current_message.sender),
-                    remote_blocked=True,
-                )
-                self.status_bar.showMessage(
-                    "No se pudieron descargar algunas imágenes remotas"
-                )
-            else:
-                self.message_viewer.show_html(
-                    html,
-                    base_url_for_message(self._current_message.sender),
-                    remote_blocked=False,
-                )
-                self.status_bar.showMessage("Imágenes remotas cargadas")
-            return
-
-        self._current_message = MailMessage(
-            uid=self._current_message.uid,
-            subject=self._current_message.subject,
-            sender=self._current_message.sender,
-            recipients=self._current_message.recipients,
-            date=self._current_message.date,
-            body_text=self._current_message.body_text,
-            body_html=html,
-            category=self._current_message.category,
-            attachments=self._current_message.attachments,
-            message_id=self._current_message.message_id,
-            in_reply_to=self._current_message.in_reply_to,
-            references=self._current_message.references,
-            unsubscribe_url=self._current_message.unsubscribe_url,
-            unsubscribe_mailto=self._current_message.unsubscribe_mailto,
-            one_click_unsubscribe=self._current_message.one_click_unsubscribe,
-            read_receipt_to=self._current_message.read_receipt_to,
-        )
-        if self.current_account:
-            self.mail_cache.save_message_body(
-                self.current_account.id, self._current_folder, self._current_message
-            )
-        base = base_url_for_message(self._current_message.sender)
-        self.message_viewer.show_html(html, base, remote_blocked=False)
-        if new_blocked > 0:
-            self.status_bar.showMessage(
-                "Imágenes remotas cargadas (algunas no disponibles)"
-            )
-        else:
-            self.status_bar.showMessage("Imágenes remotas cargadas")
-
     def _mark_selected_seen(self, seen: bool) -> None:
         uid = self._selected_message_uid()
         if not uid or not self.mail_service or not self.current_account:
@@ -3745,7 +3770,7 @@ class MainWindow(QMainWindow):
         summary = _selected_summary(uid, self._all_messages)
         if not summary:
             return
-        addr = _sender_address(summary.sender)
+        addr = extract_email_address(summary.sender)
         if not addr:
             QMessageBox.information(
                 self, "Sin dirección", "No se pudo extraer la dirección del remitente."
@@ -3796,22 +3821,16 @@ class MainWindow(QMainWindow):
             return
         self.status_bar.showMessage(f"Guardado en la agenda: {email}")
 
-    @staticmethod
-    def _format_bytes(size: int) -> str:
-        if size < 1024:
-            return f"{size} B"
-        if size < 1024 * 1024:
-            return f"{size / 1024:.1f} KB"
-        if size < 1024 * 1024 * 1024:
-            return f"{size / (1024 * 1024):.1f} MB"
-        return f"{size / (1024 * 1024 * 1024):.2f} GB"
-
     def _refresh_storage_quota(self) -> None:
-        if not self.mail_service:
+        if not self.current_account:
             self.quota_bar.setVisible(False)
             self.quota_label.setVisible(False)
             return
-        worker = StorageQuotaWorker(self.mail_service)
+        auth_secret = self.settings.get_auth_secret(self.current_account)
+        if not auth_secret:
+            self._hide_storage_quota()
+            return
+        worker = StorageQuotaWorker(self.current_account, auth_secret)
         worker.signals.finished.connect(self._on_storage_quota)
         worker.signals.error.connect(lambda _m: self._hide_storage_quota())
         worker.start()
@@ -3833,7 +3852,7 @@ class MainWindow(QMainWindow):
         self.quota_bar.setValue(percent)
         self.quota_bar.setVisible(True)
         self.quota_label.setText(
-            f"Espacio: {self._format_bytes(used)} de {self._format_bytes(limit)}"
+            f"Espacio: {format_bytes(used)} de {format_bytes(limit)}"
         )
         self.quota_label.setVisible(True)
 

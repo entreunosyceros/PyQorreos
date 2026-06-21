@@ -128,12 +128,49 @@ class BackgroundSyncManager(QObject):
         self.signals = BackgroundSyncSignals()
         self._idle_thread: IdleMonitorThread | None = None
         self._sync_threads: list[AccountSyncThread] = []
+        self._thread_refs: list[QThread] = []
         self._active_sync_keys: set[tuple[str, str]] = set()
         self._accounts: list[MailAccount] = []
         self._active_account_id: str | None = None
         self._prefs = load_preferences()
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_all_accounts)
+        self._modal_pause_depth = 0
+
+    def pause_for_modal(self) -> None:
+        """Pausa solo el polling mientras hay un diálogo modal (no toca IDLE ni sync)."""
+        self._modal_pause_depth += 1
+        if self._modal_pause_depth == 1:
+            self._poll_timer.stop()
+
+    def resume_after_modal(self) -> None:
+        """Reanuda el polling tras cerrar un diálogo modal."""
+        if self._modal_pause_depth <= 0:
+            return
+        self._modal_pause_depth -= 1
+        if self._modal_pause_depth > 0:
+            return
+        if not self._prefs.background_sync_enabled or not self._accounts:
+            return
+        interval_ms = max(60, self._prefs.background_sync_interval_sec) * 1000
+        if not self._poll_timer.isActive():
+            self._poll_timer.start(interval_ms)
+
+    def _running_idle(self) -> IdleMonitorThread | None:
+        if self._idle_thread is not None:
+            try:
+                if self._idle_thread.isRunning():
+                    return self._idle_thread
+            except RuntimeError:
+                pass
+        for thread in self._thread_refs:
+            if isinstance(thread, IdleMonitorThread):
+                try:
+                    if thread.isRunning():
+                        return thread
+                except RuntimeError:
+                    continue
+        return None
 
     def update_preferences(self, prefs: UserPreferences) -> None:
         self._prefs = prefs
@@ -142,8 +179,21 @@ class BackgroundSyncManager(QObject):
         self._accounts = accounts
         self._active_account_id = active_id
 
-    def start(self) -> None:
-        self.stop()
+    def _own_thread(self, thread: QThread) -> None:
+        """Mantiene la referencia Python hasta que Qt destruya el objeto."""
+        if thread in self._thread_refs:
+            return
+        self._thread_refs.append(thread)
+        thread.destroyed.connect(lambda *_a, t=thread: self._drop_thread_ref(t))
+
+    def _drop_thread_ref(self, thread: QThread) -> None:
+        try:
+            self._thread_refs.remove(thread)
+        except ValueError:
+            pass
+
+    def start(self, *, wait_ms: int = 0) -> None:
+        self.stop(wait_ms=wait_ms)
         if not self._prefs.background_sync_enabled or not self._accounts:
             return
         active = next(
@@ -153,13 +203,24 @@ class BackgroundSyncManager(QObject):
         if active and self._prefs.use_imap_idle:
             password = self.settings.get_auth_secret(active)
             if password:
-                self._idle_thread = IdleMonitorThread(active, password, timeout_sec=120)
-                self._idle_thread.activity_detected.connect(self._on_idle_cycle)
-                self._idle_thread.finished.connect(self._idle_thread.deleteLater)
-                self._idle_thread.start()
+                idle = self._running_idle()
+                if idle is None:
+                    idle = IdleMonitorThread(active, password, timeout_sec=120)
+                    self._own_thread(idle)
+                    idle.activity_detected.connect(self._on_idle_cycle)
+                    idle.finished.connect(idle.deleteLater)
+                    idle.start()
+                else:
+                    try:
+                        idle.activity_detected.disconnect(self._on_idle_cycle)
+                    except (RuntimeError, TypeError):
+                        pass
+                    idle.activity_detected.connect(self._on_idle_cycle)
+                self._idle_thread = idle
         self.sync_all_accounts_now()
-        interval_ms = max(60, self._prefs.background_sync_interval_sec) * 1000
-        self._poll_timer.start(interval_ms)
+        if self._modal_pause_depth <= 0:
+            interval_ms = max(60, self._prefs.background_sync_interval_sec) * 1000
+            self._poll_timer.start(interval_ms)
 
     def sync_all_accounts_now(self, *, exclude_account_id: str | None = None) -> None:
         """Descarga cabeceras nuevas de INBOX en todas las cuentas (p. ej. al arrancar)."""
@@ -171,6 +232,7 @@ class BackgroundSyncManager(QObject):
             self._sync_account_by_id(account.id, "INBOX")
 
     def stop(self, *, wait_ms: int = 5000) -> None:
+        """Detiene IDLE y polling. Con wait_ms=0 solo pausa (sin bloquear la UI)."""
         self._poll_timer.stop()
         if self._idle_thread:
             try:
@@ -178,25 +240,40 @@ class BackgroundSyncManager(QObject):
             except (RuntimeError, TypeError):
                 pass
             self._idle_thread.stop()
-            if wait_ms > 0:
-                self._idle_thread.wait(wait_ms)
-                if self._idle_thread.isRunning():
-                    self._idle_thread.terminate()
-                    self._idle_thread.wait(300)
+            idle = self._idle_thread
             self._idle_thread = None
+            self._release_thread(idle, wait_ms=wait_ms)
+
+        if wait_ms <= 0:
+            # Pausa rápida (p. ej. diálogos modales): no tocar sync en curso.
+            return
+
         for thread in list(self._sync_threads):
-            try:
-                thread.finished.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            if thread.isRunning() and wait_ms > 0:
-                thread.wait(min(wait_ms, 2000))
-                if thread.isRunning():
-                    thread.terminate()
-                    thread.wait(300)
-            thread.deleteLater()
-        self._sync_threads.clear()
+            self._release_sync_thread(thread, wait_ms=wait_ms)
         self._active_sync_keys.clear()
+
+    def _forget_sync_thread(self, thread: AccountSyncThread) -> None:
+        try:
+            self._sync_threads.remove(thread)
+        except ValueError:
+            pass
+
+    @staticmethod
+    def _release_thread(thread: QThread, *, wait_ms: int) -> None:
+        if thread is None:
+            return
+        if wait_ms > 0 and thread.isRunning():
+            thread.wait(wait_ms)
+            if thread.isRunning():
+                thread.terminate()
+                thread.wait(300)
+        if thread.isRunning():
+            thread.finished.connect(thread.deleteLater)
+        else:
+            thread.deleteLater()
+
+    def _release_sync_thread(self, thread: AccountSyncThread, *, wait_ms: int) -> None:
+        self._release_thread(thread, wait_ms=wait_ms)
 
     def _on_idle_cycle(self) -> None:
         if self._active_account_id:
@@ -223,8 +300,12 @@ class BackgroundSyncManager(QObject):
             self.cache,
             self.settings.get_classifier(),
         )
-        thread.finished.connect(lambda: self._on_sync_done(account_id, folder, thread))
+        thread.finished.connect(
+            lambda: self._on_sync_done(account_id, folder, thread)
+        )
         thread.finished.connect(thread.deleteLater)
+        thread.destroyed.connect(lambda *_a, t=thread: self._forget_sync_thread(t))
+        self._own_thread(thread)
         thread.start()
         self._sync_threads.append(thread)
 
@@ -232,8 +313,7 @@ class BackgroundSyncManager(QObject):
         self, account_id: str, folder: str, thread: AccountSyncThread
     ) -> None:
         self._active_sync_keys.discard((account_id, folder))
-        if thread in self._sync_threads:
-            self._sync_threads.remove(thread)
+        new_summaries = list(thread.new_summaries)
         self.signals.folder_updated.emit(account_id, folder)
-        if thread.new_summaries and self._prefs.notify_new_mail:
-            self.signals.new_mail.emit(account_id, folder, thread.new_summaries)
+        if new_summaries and self._prefs.notify_new_mail:
+            self.signals.new_mail.emit(account_id, folder, new_summaries)

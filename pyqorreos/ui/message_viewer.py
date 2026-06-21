@@ -435,6 +435,66 @@ class MessageViewer(QWidget):
             self._fallback.setHtml(html)
             self._stack.setCurrentWidget(self._fallback)
 
+    def apply_remote_image(self, original_url: str, data_url: str) -> None:
+        """Actualiza una imagen remota en el visor sin recargar todo el HTML."""
+        from pyqorreos.core.email_html import apply_data_url_to_html
+
+        if not data_url:
+            return
+        self._stored_html = apply_data_url_to_html(
+            self._stored_html, original_url, data_url
+        )
+        if _HAS_WEBENGINE and self._stack.currentWidget() is self._web:
+            page = self._web.page()
+            if page is None:
+                return
+            remote = json.dumps(original_url)
+            embedded = json.dumps(data_url)
+            script = f"""
+            (function() {{
+                var remote = {remote};
+                var dataUrl = {embedded};
+                document.querySelectorAll('img').forEach(function(img) {{
+                    var blocked = img.getAttribute('data-blocked-src');
+                    if (blocked === remote) {{
+                        img.src = dataUrl;
+                        img.removeAttribute('data-blocked-src');
+                    }}
+                    var blockedSet = img.getAttribute('data-blocked-srcset');
+                    if (blockedSet && blockedSet.indexOf(remote) >= 0) {{
+                        img.removeAttribute('data-blocked-srcset');
+                    }}
+                }});
+                document.querySelectorAll('[background]').forEach(function(el) {{
+                    var blocked = el.getAttribute('data-blocked-background');
+                    if (blocked === remote) {{
+                        el.setAttribute('background', dataUrl);
+                        el.removeAttribute('data-blocked-background');
+                    }}
+                }});
+            }})();
+            """
+            try:
+                page.runJavaScript(script)
+            except Exception:
+                self._render_current()
+        elif self._view_mode != "plain" and self._stored_html.strip():
+            self._render_current()
+
+    def mark_remote_images_unblocked(self) -> None:
+        """El usuario pidió cargar imágenes; oculta el botón de bloqueo."""
+        self._remote_blocked = False
+        self._btn_load_images.setVisible(False)
+
+    def set_remote_load_finished(self, still_blocked: bool) -> None:
+        """Actualiza el estado tras cargar imágenes (sin recargar todo el HTML)."""
+        self._remote_blocked = still_blocked
+        self._btn_load_images.setVisible(still_blocked)
+
+    @property
+    def stored_html(self) -> str:
+        return self._stored_html
+
     def show_html(self, html: str, base_url: str = "", *, remote_blocked: bool = False) -> None:
         if not html.strip():
             self.show_plain("(Mensaje vacío)")

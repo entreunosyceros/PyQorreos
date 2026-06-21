@@ -57,11 +57,7 @@ def normalize_theme(value: str) -> str:
     value = (value or "").strip().lower()
     return value if value in THEME_CHOICES else THEME_LIGHT
 
-# Obtiene el tema actual.
-def current_theme() -> str:
-    return _CURRENT_THEME
 
-# Obtiene los tokens de colores para un tema.
 def theme_tokens(theme: str | None = None) -> ThemeTokens:
     theme = normalize_theme(theme or _CURRENT_THEME)
     if theme == THEME_DARK:

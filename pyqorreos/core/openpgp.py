@@ -10,7 +10,7 @@ from __future__ import annotations
 import email
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from email import policy
 from email.message import EmailMessage, Message
 from email.utils import getaddresses
@@ -65,7 +65,6 @@ class PgpStatus:
             "signer": self.signer,
             "error": self.error,
         }
-# Tests para la conversión de PgpStatus a diccionario
     @classmethod
     def from_dict(cls, data: dict | None) -> PgpStatus:
         if not isinstance(data, dict):
@@ -78,7 +77,6 @@ class PgpStatus:
             error=str(data.get("error", "")),
         )
 
-# Tests para la configuración de OpenPGP
 @dataclass
 class OpenPgpSettings:
     """Preferencias OpenPGP efectivas al procesar un mensaje."""
@@ -91,15 +89,12 @@ class OpenPgpSettings:
     signing_key_id: str = ""
     cache_decrypted_bodies: bool = True
 
-# Tests para la verificación de la disponibilidad del binario de GPG
 def gpg_binary_available() -> bool:
     return bool(shutil.which("gpg"))
 
-# Tests para la verificación de la disponibilidad de OpenPGP
 def openpgp_available() -> bool:
     return _HAS_GNUPG and gpg_binary_available()
 
-# Tests para la obtención del motivo de la falta de disponibilidad de OpenPGP
 def openpgp_unavailable_reason() -> str:
     if not _HAS_GNUPG:
         return "Falta el paquete Python «python-gnupg». Instálalo con pip."
@@ -107,7 +102,6 @@ def openpgp_unavailable_reason() -> str:
         return "No se encontró el programa «gpg» (GnuPG) en el sistema."
     return ""
 
-# Tests para la obtención de la ruta de la carpeta de GPG
 def gnupg_home(use_system: bool) -> Path:
     if use_system:
         return Path.home() / ".gnupg"
@@ -115,16 +109,7 @@ def gnupg_home(use_system: bool) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
 
-# Tests para la obtención de la instancia de GPG
-def get_gpg(use_system_home: bool = False) -> Any | None:
-    if not openpgp_available():
-        return None
-    assert gnupg is not None
-    home = gnupg_home(use_system_home)
-    home.mkdir(parents=True, exist_ok=True)
-    return gnupg.GPG(gnupghome=str(home), gpgbinary=shutil.which("gpg") or "gpg")
 
-# Tests para la obtención de la instancia de GPG
 def get_gpg(use_system_home: bool = False) -> Any | None:
     if not openpgp_available():
         return None
@@ -136,7 +121,7 @@ def get_gpg(use_system_home: bool = False) -> Any | None:
     except (FileNotFoundError, OSError):
         return None
 
-# Tests para la extracción de protocolos PGP
+
 def _mime_protocol(msg: Message) -> str:
     param = msg.get_param("protocol")
     if param:
@@ -147,14 +132,12 @@ def _mime_protocol(msg: Message) -> str:
         return match.group(1).lower()
     return ""
 
-# Tests para la verificación de protocolos PGP firmados
 def _is_pgp_signed_protocol(msg: Message) -> bool:
     proto = _mime_protocol(msg)
     if not proto:
         return True
     return proto.startswith(_PGP_SIGN_PROTOCOL)
 
-# Tests para la verificación de protocolos PGP cifrados
 def _is_pgp_encrypted_protocol(msg: Message) -> bool:
     proto = _mime_protocol(msg)
     if not proto:
@@ -222,7 +205,6 @@ def classify_mime_message(msg: Message) -> str:
                 return "signed"
     return "none"
 
-# Tests para la extracción de texto del cuerpo del mensaje
 def _message_text_payload(msg: Message) -> str:
     try:
         if msg.is_multipart():
@@ -246,7 +228,6 @@ def _message_text_payload(msg: Message) -> str:
         return ""
 
 
-# Tests para la extracción de bytes cifrados
 def _extract_encrypted_bytes(msg: Message) -> bytes | None:
     if msg.get_content_type() == "multipart/encrypted":
         octet: bytes | None = None
@@ -283,7 +264,6 @@ def _signed_parts(msg: Message) -> tuple[bytes | None, bytes | None]:
         signature if isinstance(signature, bytes) else None,
     )
 
-# Tests para la asignación de mensajes de error de GPG
 def _map_gpg_status(status: str) -> str:
     text = (status or "").strip()
     lower = text.lower()
@@ -295,7 +275,6 @@ def _map_gpg_status(status: str) -> str:
         return "Tiempo de espera agotado"
     return text or "Error de OpenPGP"
 
-# Tests para la verificación de mensajes firmados
 def verify_signed_message(
     msg: Message,
     *,
@@ -351,7 +330,6 @@ def verify_signed_message(
 
 verify_signature = verify_signed_message
 
-# Tests para el descifrado de mensajes PGP/MIME o inline
 def decrypt_message(
     msg: Message,
     *,
@@ -400,7 +378,6 @@ def decrypt_message(
         status.signer = str(decrypted.username or "")
     return inner, status
 
-# Tests para el procesamiento de mensajes entrantes cuando OpenPGP está habilitado
 def process_incoming_message(
     raw: bytes,
     *,
@@ -411,7 +388,7 @@ def process_incoming_message(
     Procesa el RFC822 entrante: descifra/verifica si aplica.
 
     Si OpenPGP está desactivado, devuelve el mensaje original sin coste extra
-  más allá del parseo MIME.
+    más allá del parseo MIME.
     """
     msg = email.message_from_bytes(raw, policy=policy.default)
     if not settings.enabled:
@@ -454,10 +431,8 @@ def process_incoming_message(
             msg, use_system_home=settings.use_system_gnupg_home
         )
         return msg, status
-# Tests para el procesamiento de mensajes entrantes cuando OpenPGP está deshabilitado
     return msg, PgpStatus()
 
-    # Tests para la解析 de direcciones de correo electrónico de destinatarios
 def parse_recipient_emails(*fields: str) -> list[str]:
     addresses: list[str] = []
     seen: set[str] = set()
@@ -508,7 +483,6 @@ def encrypt_outgoing_message(
         return data.encode("utf-8")
     return bytes(data)
 
-# Tests para la lista de claves públicas OpenPGP
 def list_public_keys(use_system_home: bool = False) -> list[dict[str, str]]:
     gpg = get_gpg(use_system_home)
     if gpg is None:
@@ -525,7 +499,6 @@ def list_public_keys(use_system_home: bool = False) -> list[dict[str, str]]:
         )
     return keys
 
-# Tests para la lista de claves privadas OpenPGP
 def list_secret_keys(use_system_home: bool = False) -> list[dict[str, str]]:
     gpg = get_gpg(use_system_home)
     if gpg is None:
@@ -541,7 +514,6 @@ def list_secret_keys(use_system_home: bool = False) -> list[dict[str, str]]:
         )
     return keys
 
-# Tests para la importación de claves OpenPGP desde un archivo
 def import_key_file(path: str, use_system_home: bool = False) -> tuple[int, str]:
     gpg = get_gpg(use_system_home)
     if gpg is None:
@@ -552,7 +524,6 @@ def import_key_file(path: str, use_system_home: bool = False) -> tuple[int, str]
         return 0, "No se importó ninguna clave"
     return count, ""
 
-# Tests para la generación de un resumen del estado OpenPGP
 def pgp_status_summary(status: PgpStatus) -> str:
     parts: list[str] = []
     if status.encrypted:

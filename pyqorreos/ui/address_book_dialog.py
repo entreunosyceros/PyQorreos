@@ -4,7 +4,7 @@ Diálogo de agenda de contactos de correo.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -30,6 +30,7 @@ from pyqorreos.core.address_book import (
     normalize_email,
 )
 from pyqorreos.ui.theme import mark_role, prevent_context_menu
+from pyqorreos.ui.workers import LoadContactsWorker
 
 
 class AddressBookDialog(QDialog):
@@ -46,12 +47,21 @@ class AddressBookDialog(QDialog):
         self._book = book or get_address_book()
         self._pick_mode = pick_mode
         self._selected_email: str | None = None
+        self._load_worker: LoadContactsWorker | None = None
         self.setWindowTitle("Elegir contacto" if pick_mode else "Agenda de contactos")
         self.setMinimumSize(640, 420)
         self.resize(760, 480)
         prevent_context_menu(self)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(self._reload_table)
         self._build_ui()
-        self._reload_table()
+        if self._book.is_loaded:
+            self._reload_table()
+        else:
+            self._status_label.setText("Cargando agenda…")
+            QTimer.singleShot(0, self._start_load_worker)
 
     def selected_email(self) -> str | None:
         return self._selected_email
@@ -74,11 +84,15 @@ class AddressBookDialog(QDialog):
         mark_role(hint, "hint")
         layout.addWidget(hint)
 
+        self._status_label = QLabel("")
+        mark_role(self._status_label, "hint")
+        layout.addWidget(self._status_label)
+
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel("Buscar:"))
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Nombre o dirección de correo")
-        self.search_edit.textChanged.connect(self._reload_table)
+        self.search_edit.textChanged.connect(self._schedule_reload)
         search_row.addWidget(self.search_edit, 1)
         layout.addLayout(search_row)
 
@@ -121,6 +135,36 @@ class AddressBookDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _start_load_worker(self) -> None:
+        if self._book.is_loaded:
+            self._reload_table()
+            return
+        worker = LoadContactsWorker()
+        worker.signals.finished.connect(self._on_contacts_loaded)
+        worker.signals.error.connect(self._on_contacts_load_error)
+        worker.finished.connect(worker.deleteLater)
+        worker.destroyed.connect(self._on_load_worker_destroyed)
+        self._load_worker = worker
+        worker.start()
+
+    def _on_load_worker_destroyed(self, *_args) -> None:
+        self._load_worker = None
+
+    def _on_contacts_loaded(self, contacts: object) -> None:
+        if not isinstance(contacts, list):
+            self._status_label.setText("No se pudo cargar la agenda.")
+            return
+        self._book.set_contacts(contacts)
+        self._reload_table()
+
+    def _on_contacts_load_error(self, message: str) -> None:
+        self._status_label.setText(message or "No se pudo cargar la agenda.")
+
+    def _schedule_reload(self) -> None:
+        if not self._book.is_loaded:
+            return
+        self._search_timer.start()
+
     def _filtered_contacts(self) -> list[AddressContact]:
         query = self.search_edit.text().strip()
         if query:
@@ -128,19 +172,21 @@ class AddressBookDialog(QDialog):
         return self._book.contacts()
 
     def _reload_table(self) -> None:
+        if not self._book.is_loaded:
+            return
         contacts = self._filtered_contacts()
-        self.table.setRowCount(0)
-        for contact in contacts:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            star = "★" if contact.important else ""
-            self.table.setItem(row, 0, QTableWidgetItem(star))
-            self.table.setItem(row, 1, QTableWidgetItem(contact.name))
-            self.table.setItem(row, 2, QTableWidgetItem(contact.email))
-            for col in range(3):
-                item = self.table.item(row, col)
-                if item is not None:
-                    item.setData(Qt.ItemDataRole.UserRole, contact.id)
+        self._status_label.setText("")
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(len(contacts))
+        for row, contact in enumerate(contacts):
+            star = QTableWidgetItem("★" if contact.important else "")
+            name = QTableWidgetItem(contact.name)
+            email = QTableWidgetItem(contact.email)
+            email.setData(Qt.ItemDataRole.UserRole, contact.id)
+            self.table.setItem(row, 0, star)
+            self.table.setItem(row, 1, name)
+            self.table.setItem(row, 2, email)
+        self.table.setUpdatesEnabled(True)
 
     def _selected_contact(self) -> AddressContact | None:
         row = self.table.currentRow()
@@ -150,7 +196,9 @@ class AddressBookDialog(QDialog):
         if item is None:
             return None
         contact_id = item.data(Qt.ItemDataRole.UserRole)
-        return next((c for c in self._book.contacts() if c.id == contact_id), None)
+        if not contact_id:
+            return None
+        return self._book.find_by_id(str(contact_id))
 
     def _on_row_activated(self, _index) -> None:
         if self._pick_mode:
@@ -225,6 +273,12 @@ class AddressBookDialog(QDialog):
         self._reload_table()
 
     def closeEvent(self, event) -> None:
+        if self._load_worker is not None:
+            try:
+                self._load_worker.signals.finished.disconnect(self._on_contacts_loaded)
+                self._load_worker.signals.error.disconnect(self._on_contacts_load_error)
+            except (RuntimeError, TypeError):
+                pass
         self._book.save()
         super().closeEvent(event)
 

@@ -94,6 +94,23 @@ class LoadFolderWorker(QThread):
             self.signals.error.emit(friendly_mail_error(exc))
 
 
+class LoadContactsWorker(QThread):
+    """Lee la agenda de contactos desde JSON sin bloquear la interfaz."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        from pyqorreos.core.address_book import AddressBook
+
+        try:
+            contacts = AddressBook.read_contacts_from_disk()
+            self.signals.finished.emit(contacts)
+        except Exception as exc:
+            self.signals.error.emit(friendly_mail_error(exc))
+
+
 class SyncFolderWorker(QThread):
     """
     Sincroniza una carpeta de forma incremental.
@@ -295,33 +312,6 @@ class FetchMessageWorker(QThread):
                     )
             self._maybe_delete_from_server()
             self.signals.finished.emit(message)
-        except Exception as exc:
-            self.signals.error.emit(friendly_mail_error(exc))
-
-
-class EnhanceHtmlWorker(QThread):
-    """Descarga imágenes remotas para un mensaje ya mostrado en pantalla."""
-
-    def __init__(
-        self,
-        service: MailService,
-        uid: str,
-        html: str,
-        folder: str = "",
-    ) -> None:
-        super().__init__()
-        self.service = service
-        self.uid = uid
-        self.html = html
-        self.folder = folder
-        self.signals = WorkerSignals()
-
-    def run(self) -> None:
-        try:
-            enhanced = self.service.enhance_message_html(
-                self.html, uid=self.uid, folder=self.folder or None
-            )
-            self.signals.finished.emit((self.uid, enhanced))
         except Exception as exc:
             self.signals.error.emit(friendly_mail_error(exc))
 
@@ -753,17 +743,22 @@ class UnsubscribeWorker(QThread):
 
 
 class StorageQuotaWorker(QThread):
-    def __init__(self, service: MailService) -> None:
+    def __init__(self, account: MailAccount, password: str) -> None:
         super().__init__()
-        self.service = service
+        self.account = account
+        self.password = password
         self.signals = WorkerSignals()
 
     def run(self) -> None:
+        service = MailService(self.account, self.password)
         try:
-            quota = self.service.get_storage_quota()
+            service.connect()
+            quota = service.get_storage_quota()
             self.signals.finished.emit(quota)
         except Exception as exc:
             self.signals.error.emit(friendly_mail_error(exc))
+        finally:
+            service.disconnect()
 
 
 class ExportMessageWorker(QThread):
@@ -819,11 +814,11 @@ class ExportFolderWorker(QThread):
         from pyqorreos.core.export_mail import save_mbox
 
         try:
-            messages: list[tuple[bytes, str | None]] = []
+            messages: list[bytes] = []
             for uid in self.uids:
                 try:
                     raw = self.service.fetch_raw_bytes(uid, self.folder)
-                    messages.append((raw, None))
+                    messages.append(raw)
                 except Exception:
                     continue
             count = save_mbox(messages, Path(self.dest_path))
