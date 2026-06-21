@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyqorreos.core.settings import Settings
 from pyqorreos.core.oauth_clients import (
     OAUTH_CLIENTS_FILE,
     OAUTH_REDIRECT_URI,
@@ -45,9 +46,17 @@ from pyqorreos.core.user_preferences import (
 )
 from pyqorreos.core.translate import TRANSLATION_LANGUAGES, language_label
 from pyqorreos.ui.theme import mark_role, prevent_context_menu
+from pyqorreos.ui.classification_rules_widget import ClassificationRulesWidget
 
 
-_PREFERENCES_TAB_INDEX = {"general": 0, "snippets": 1, "plantillas": 1, "oauth": 2}
+_PREFERENCES_TAB_INDEX = {
+    "general": 0,
+    "snippets": 1,
+    "plantillas": 1,
+    "classification": 2,
+    "clasificacion": 2,
+    "oauth": 3,
+}
 
 
 class PreferencesDialog(QDialog):
@@ -67,6 +76,8 @@ class PreferencesDialog(QDialog):
             normalize_compose_snippets(prefs.compose_snippets)
         )
         self._snippet_sync_blocked = False
+        self._settings = Settings()
+        self._classification_rules = self._settings.load_classification_rules()
         self._build_ui()
         prevent_context_menu(self)
         self._reload_snippet_list()
@@ -81,6 +92,7 @@ class PreferencesDialog(QDialog):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_general_tab(), "General")
         self.tabs.addTab(self._build_snippets_tab(), "Plantillas")
+        self.tabs.addTab(self._build_classification_tab(), "Clasificación")
         self.tabs.addTab(self._build_oauth_tab(), "OAuth")
         layout.addWidget(self.tabs)
 
@@ -168,8 +180,18 @@ class PreferencesDialog(QDialog):
         view_form.addRow(self.block_images)
 
         self.thread_view = QCheckBox("Vista de conversaciones (agrupar hilos)")
+        self.thread_view.setToolTip(
+            "Muestra un mensaje por hilo (el más reciente). "
+            "El número entre paréntesis indica cuántos hay en el hilo."
+        )
         self.thread_view.setChecked(self._prefs.thread_view)
         view_form.addRow(self.thread_view)
+
+        self.search_all_folders = QCheckBox(
+            "Buscar en todas las carpetas de la cuenta (solo cabeceras en caché)"
+        )
+        self.search_all_folders.setChecked(self._prefs.search_all_folders)
+        view_form.addRow(self.search_all_folders)
 
         self.large_headers = QCheckBox("Solo cabeceras en carpetas muy grandes")
         self.large_headers.setChecked(self._prefs.headers_only_large_folders)
@@ -238,6 +260,16 @@ class PreferencesDialog(QDialog):
 
         scroll.setWidget(page)
         return scroll
+
+    def _build_classification_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self._classification_widget = ClassificationRulesWidget(
+            copy.deepcopy(self._classification_rules),
+            parent=page,
+        )
+        layout.addWidget(self._classification_widget)
+        return page
 
     def _build_oauth_tab(self) -> QWidget:
         scroll = QScrollArea()
@@ -503,6 +535,9 @@ class PreferencesDialog(QDialog):
             self.tabs.setCurrentIndex(_PREFERENCES_TAB_INDEX["snippets"])
             return
         self._snippets = normalized
+        self._settings.save_classification_rules(
+            self._classification_widget.get_rules()
+        )
         save_oauth_clients_data(oauth_data)
         self._oauth_data = oauth_data
         self.accept()
@@ -524,4 +559,5 @@ class PreferencesDialog(QDialog):
             translate_target_language=self.translate_lang.currentData(),
             theme=self.theme_combo.currentData(),
             compose_request_read_receipt=self.compose_read_receipt.isChecked(),
+            search_all_folders=self.search_all_folders.isChecked(),
         )

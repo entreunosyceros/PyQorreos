@@ -182,3 +182,13 @@ def build_forward(message: MailMessage) -> ComposeDraft:
         body=_quote_plain(message),
         body_html=_compose_html_with_room_for_reply(quote),
     )
+
+
+def build_draft_from_message(message: MailMessage) -> ComposeDraft:
+    """Reconstruye un borrador IMAP para seguir editándolo."""
+    return ComposeDraft(
+        to=message.recipients,
+        subject=message.subject,
+        body=message.body_text,
+        body_html=message.body_html,
+    )

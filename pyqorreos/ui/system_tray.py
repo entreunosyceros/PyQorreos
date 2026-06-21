@@ -9,8 +9,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon, QWidget
+
+
+class SystemTraySignals(QObject):
+    """Señales emitidas por el icono de bandeja."""
+
+    message_clicked = Signal()
 
 
 class SystemTray:
@@ -18,6 +25,7 @@ class SystemTray:
 
     def __init__(self, parent: QWidget, logo_path: Path, tooltip: str = "PyQorreos") -> None:
         self._parent = parent
+        self.signals = SystemTraySignals()
         self._icon = QSystemTrayIcon(parent)
         self._icon.setToolTip(tooltip)
 
@@ -25,6 +33,7 @@ class SystemTray:
             self._icon.setIcon(QIcon(str(logo_path)))
 
         self._icon.activated.connect(self._on_activated)
+        self._icon.messageClicked.connect(self.signals.message_clicked.emit)
 
     def set_menu(self, menu: QMenu) -> None:
         """Asigna el menú contextual (mismas acciones que el menú superior)."""

@@ -86,7 +86,7 @@ class MailCache:
         return conn
 
     @staticmethod
-    def _summary_from_row(row: sqlite3.Row) -> MailSummary:
+    def _summary_from_row(row: sqlite3.Row, *, folder: str = "") -> MailSummary:
         date_val = None
         if row["date_iso"]:
             try:
@@ -95,6 +95,9 @@ class MailCache:
                 )
             except ValueError:
                 pass
+        row_folder = folder
+        if not row_folder and "folder" in row.keys():
+            row_folder = row["folder"] or ""
         return MailSummary(
             uid=row["uid"],
             subject=row["subject"],
@@ -106,6 +109,7 @@ class MailCache:
             has_attachments=bool(row["has_attachments"]),
             message_id=row["message_id"] or "",
             thread_key=row["thread_key"] or "",
+            folder=row_folder,
         )
 
     def _init_db(self) -> None:
@@ -320,7 +324,7 @@ class MailCache:
                 """,
                 (account_id, folder),
             ).fetchall()
-        return [self._summary_from_row(row) for row in rows]
+        return [self._summary_from_row(row, folder=folder) for row in rows]
 
     def folder_count(self, account_id: str, folder: str) -> int:
         with self._connect() as conn:
@@ -336,7 +340,7 @@ class MailCache:
     def query_summaries(
         self,
         account_id: str,
-        folder: str,
+        folder: str | None,
         *,
         query: str = "",
         category: str | None = None,
@@ -344,8 +348,11 @@ class MailCache:
         sort_by: str = "date_desc",
     ) -> list[MailSummary]:
         """Filtra y ordena en SQLite (búsqueda rápida sin recorrer toda la lista en Python)."""
-        clauses = ["account_id = ?", "folder = ?"]
-        params: list[object] = [account_id, folder]
+        clauses = ["account_id = ?"]
+        params: list[object] = [account_id]
+        if folder is not None:
+            clauses.append("folder = ?")
+            params.append(folder)
         q = query.strip()
         if q:
             like = f"%{q}%"
@@ -363,16 +370,20 @@ class MailCache:
             "sender": "LOWER(sender) ASC, sort_index ASC",
             "subject": "LOWER(subject) ASC, sort_index ASC",
         }.get(sort_by, "COALESCE(date_iso, '') DESC, sort_index ASC")
+        folder_col = ", folder" if folder is None else ""
         sql = f"""
             SELECT uid, subject, sender, date_iso, seen, flagged, category,
-                   has_attachments, message_id, thread_key
+                   has_attachments, message_id, thread_key{folder_col}
             FROM messages
             WHERE {' AND '.join(clauses)}
             ORDER BY {order_sql}
         """
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._summary_from_row(row) for row in rows]
+        default_folder = folder or ""
+        return [
+            self._summary_from_row(row, folder=default_folder) for row in rows
+        ]
 
     def search_summaries(
         self,

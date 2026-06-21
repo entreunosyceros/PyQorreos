@@ -113,6 +113,7 @@ class MailSummary:
     has_attachments: bool = False
     message_id: str = ""
     thread_key: str = ""
+    folder: str = ""
 
 
 @dataclass

@@ -6,9 +6,10 @@
 
 | Ubicación | Contenido |
 |-----------|-----------|
-| `~/.config/pyqorreos/accounts.json` | Cuentas configuradas |
-| `~/.config/pyqorreos/classification.json` | Reglas de clasificación |
-| `~/.config/pyqorreos/preferences.json` | Preferencias (sync, imágenes, hilos, idioma de traducción, **tema**, plantillas…) |
+| `~/.config/pyqorreos/accounts.json` | Cuentas configuradas (`last_account_id`, `last_folders` por cuenta) |
+| `~/.config/pyqorreos/classification.json` | Reglas de clasificación (también editables en Preferencias → Clasificación) |
+| `~/.config/pyqorreos/contacts.json` | Agenda de contactos (correo, nombre, notas) |
+| `~/.config/pyqorreos/preferences.json` | Preferencias (sync, imágenes, hilos, búsqueda multi-carpeta, idioma de traducción, **tema**, plantillas…) |
 | `~/.config/pyqorreos/mail_cache.db` | Caché local de correos |
 | `~/.config/pyqorreos/oauth_clients.json` | Client ID y secret OAuth (Gmail / Microsoft) |
 | Llavero del sistema | Contraseñas y tokens OAuth (vía `keyring`) |
@@ -62,9 +63,10 @@ El `refresh_token` se guarda en el llavero de forma permanente; el `access_token
 
 ### Sincronización al arrancar
 
-- Con cuentas ya configuradas, la app **conecta y descarga correo nuevo** al abrir (INBOX de la cuenta activa).
+- Con cuentas ya configuradas, la app **conecta y descarga correo nuevo** al abrir (carpeta activa de la última sesión, no siempre INBOX).
 - Las demás cuentas se actualizan al inicio si **Sincronizar cuentas en segundo plano** está activo en Preferencias.
 - La caché local permite ver la bandeja **antes** de que termine la conexión.
+- La **barra de progreso** bajo la lista solo aparece cuando hay mensajes nuevos que descargar; el estado de red (conectado, sincronizando…) se muestra de forma permanente a la derecha de la barra de estado.
 
 ### Traducción
 

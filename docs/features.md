@@ -35,19 +35,24 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 ## Bandeja y sincronización
 
 - Vista de tres paneles: carpetas | lista de mensajes | lectura
-- **Al iniciar la aplicación**: muestra la caché local de INBOX al instante, el **árbol de carpetas** de la última sesión (o al menos INBOX) y descarga cabeceras nuevas del servidor en segundo plano
+- **Al iniciar la aplicación**: muestra la caché local de la **última carpeta** usada, el **árbol de carpetas** de la última sesión y descarga cabeceras nuevas del servidor en segundo plano
+- **Retoma la última carpeta** abierta por cuenta al volver a conectar
+- Indicador permanente de **estado de conexión** en la barra de estado (sin conexión, conectado, sincronizando…)
 - Árbol de carpetas con iconos SVG y contador de no leídos
 - Crear carpetas y subcarpetas en el servidor IMAP; eliminar carpetas de usuario (p. ej. restos de otros clientes como `Mailspring`)
 - Sincronización incremental (solo descarga mensajes nuevos)
 - Sincronización en segundo plano (IMAP IDLE + polling) configurable en preferencias (por defecto cada 15 minutos)
 - Caché local SQLite para abrir la bandeja al instante
-- Paginación configurable y barra de progreso de sincronización
+- Paginación configurable; **barra de progreso** bajo la lista solo mientras se descargan mensajes nuevos (no permanece activa en reposo)
+- Botón **Cancelar sincronización** visible durante la comprobación con el servidor
 - Indicador de cuota de almacenamiento IMAP bajo el árbol de carpetas
 - Clasificación automática: normal, importante, spam (con filtro y colores)
 - Reglas de remitente al marcar spam o importante (aprendizaje persistente)
+- Pestaña **Clasificación** en Preferencias para revisar y quitar reglas aprendidas
 - Búsqueda por asunto o remitente, filtro «Solo no leídos» y ordenación
-- Vista de conversaciones (agrupación por hilos, opcional en preferencias)
-- Notificaciones de correo nuevo en la bandeja del sistema (remitente y asunto)
+- Opción **buscar en todas las carpetas** de la cuenta (cabeceras en caché); muestra la carpeta en la lista
+- Vista de conversaciones (agrupación por hilos, opcional en preferencias); el asunto indica cuántos mensajes hay en el hilo
+- Notificaciones de correo nuevo en la bandeja del sistema (remitente y asunto); **clic en la notificación** abre la carpeta o el mensaje
 
 ## Lectura de mensajes
 
@@ -76,16 +81,17 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Marcar como leído / no leído
 - Marcar categoría (importante, spam, normal) desde barra, menú o clic derecho
 - Menú contextual en el listado (abrir, copiar remitente, actualizar carpeta…)
-- Atajos: `Ctrl+R`, `Ctrl+Shift+R`, `Ctrl+L`, `Supr`, `F5`, `Enter` (abrir mensaje) — [tabla completa](keyboard-shortcuts.md)
+- Atajos: `Ctrl+R`, `Ctrl+Shift+R`, `Ctrl+L`, `Supr`, `F5`, `Enter` (abrir mensaje), `Ctrl+U` / `Ctrl+Shift+U` (no leído / leído), `Ctrl+Shift+M` (mover) — [tabla completa](keyboard-shortcuts.md)
+- Mensajes cuando la carpeta o la búsqueda no devuelven resultados
 
 ## Redacción
 <div align="center">
 <img width="818" height="655" alt="redactar-correo" src="https://github.com/user-attachments/assets/133d2766-2950-4b74-9cac-378c5135b511" />
 </div>
 
-
 - Editor enriquecido: negrita, cursiva, subrayado, listas, color, enlaces e imágenes
 - **Plantillas** de texto rápido (pestaña «Plantillas» en Preferencias; menú en el editor al redactar)
+- Botón **Agenda…** y autocompletado en Para/CC/CCO al redactar
 - Aviso si el cuerpo menciona adjuntos pero no hay ninguno seleccionado
 - Adjuntar archivos al enviar
 - **Acuse de recibo** opcional al enviar (cabecera `Disposition-Notification-To`; el cliente del destinatario decide si responde); preferencia para activarlo por defecto al redactar
@@ -93,18 +99,29 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Envío HTML + texto plano por SMTP
 - Borradores precargados al responder o reenviar (cita HTML del mensaje original)
 - Guardar borrador en la carpeta Drafts del servidor
+- **Abrir y editar borradores** desde la carpeta Borradores (doble clic)
+- Tras enviar, opción de **abrir la carpeta Enviados**
 - Firma insertada automáticamente al redactar
+
+## Agenda de contactos
+
+- **Agenda local** de direcciones habituales o importantes (`~/.config/pyqorreos/contacts.json`)
+- **Sin impacto en el rendimiento**: el JSON solo se lee al abrir la agenda o al redactar; no interviene en la sincronización ni en la caché de mensajes
+- Gestión en **Correo → Agenda de contactos…** o **Herramientas → Agenda de contactos…** (`Ctrl+Shift+A`)
+- **Clic derecho** en un mensaje → «Guardar remitente en la agenda…»
+- Contactos con nombre, notas y marca **importante** (aparecen primero en la lista)
 
 ## Rendimiento y estabilidad
 
 - Operaciones de red en hilos secundarios (la interfaz no se bloquea)
 - Caché SQLite en modo **WAL** con `busy_timeout` para lecturas concurrentes durante la sincronización
 - Búsqueda en base de datos con debounce
-- Conexión IMAP dedicada por mensaje y reintentos ante errores de protocolo
+- Conexión IMAP dedicada por mensaje y reintentos ante errores transitorios de red
 - Reconexión IMAP segura al usar varias cuentas o hilos de lectura en paralelo
 - Limpieza de adjuntos temporales al cerrar la aplicación
 - Cabeceras limitadas en carpetas muy grandes (>5000 mensajes) en la primera sync
 - Timeouts IMAP/SMTP y mensajes de error claros — ver [Pilares de calidad](quality-pillars.md)
+- **Tests unitarios** con `pytest` en `tests/` (retry, caché, carpetas, errores de red, composición)
 
 ## Apariencia
 

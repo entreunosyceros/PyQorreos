@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -24,9 +25,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from pyqorreos.core.account import is_microsoft_email
+from pyqorreos.core.address_book import AddressBook
+from pyqorreos.core.folder_utils import find_sent_folder
 from pyqorreos.core.compose_email import EmailAttachment, build_draft_bytes, prepare_outgoing_html
 from pyqorreos.core.compose_utils import (
     body_mentions_attachment,
@@ -37,6 +41,7 @@ from pyqorreos.core.mail_service import MailService
 from pyqorreos.core.reply_utils import ComposeDraft
 from pyqorreos.core.user_preferences import DEFAULT_COMPOSE_SNIPPETS
 from pyqorreos.ui.rich_compose_editor import RichComposeEditor
+from pyqorreos.ui.address_book_dialog import AddressBookDialog
 from pyqorreos.ui.theme import mark_role, resolve_theme_from_parent
 from pyqorreos.ui.workers import SaveDraftWorker, SendMailWorker
 
@@ -53,12 +58,18 @@ class ComposeDialog(QDialog):
         drafts_folder: str | None = None,
         snippets: list[dict[str, str]] | None = None,
         request_read_receipt_default: bool = False,
+        folder_names: list[str] | None = None,
+        address_book: AddressBook | None = None,
     ) -> None:
         super().__init__(parent)
         self.service = service
         self.draft = draft or ComposeDraft()
         self._signature = signature.strip()
         self._drafts_folder = drafts_folder
+        self._folder_names = folder_names or []
+        self._address_book = address_book
+        self._sent_folder = find_sent_folder(self._folder_names)
+        self.navigate_sent_folder: str | None = None
         self._snippets = snippets or list(DEFAULT_COMPOSE_SNIPPETS)
         self._attachments: list[EmailAttachment] = []
         self._request_read_receipt_default = request_read_receipt_default
@@ -88,21 +99,23 @@ class ComposeDialog(QDialog):
 
         self.to_edit = QLineEdit()
         self.to_edit.setPlaceholderText("destinatario@ejemplo.com")
-        form.addRow("Para:", self.to_edit)
+        form.addRow("Para:", self._address_field_row(self.to_edit))
 
         self.cc_edit = QLineEdit()
         self.cc_edit.setPlaceholderText("copia@ejemplo.com (opcional)")
-        form.addRow("CC:", self.cc_edit)
+        form.addRow("CC:", self._address_field_row(self.cc_edit))
 
         self.bcc_edit = QLineEdit()
         self.bcc_edit.setPlaceholderText("copia.oculta@ejemplo.com (opcional)")
-        form.addRow("CCO:", self.bcc_edit)
+        form.addRow("CCO:", self._address_field_row(self.bcc_edit))
 
         self.subject_edit = QLineEdit()
         self.subject_edit.setPlaceholderText("Escribe el asunto del correo")
         form.addRow("Asunto:", self.subject_edit)
 
         layout.addLayout(form)
+        if self._address_book is not None:
+            self._setup_address_completers()
 
         snippet_row = QHBoxLayout()
         snippet_row.addWidget(QLabel("Plantilla:"))
@@ -169,6 +182,45 @@ class ComposeDialog(QDialog):
         buttons.accepted.connect(self._send)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _address_field_row(self, edit: QLineEdit) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(edit, 1)
+        if self._address_book is not None:
+            btn = QPushButton("Agenda…")
+            mark_role(btn, "default")
+            btn.setToolTip("Elegir un contacto de la agenda")
+            btn.clicked.connect(lambda _checked=False, field=edit: self._pick_from_agenda(field))
+            layout.addWidget(btn)
+        return row
+
+    def _setup_address_completers(self) -> None:
+        if self._address_book is None:
+            return
+        strings = self._address_book.autocomplete_strings()
+        if not strings:
+            return
+        for edit in (self.to_edit, self.cc_edit, self.bcc_edit):
+            completer = QCompleter(strings)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            edit.setCompleter(completer)
+
+    def _pick_from_agenda(self, target: QLineEdit) -> None:
+        if self._address_book is None:
+            return
+        email = AddressBookDialog.pick_email(self, book=self._address_book)
+        if not email:
+            return
+        current = target.text().strip()
+        if current and not current.endswith((",", ";")):
+            target.setText(f"{current}, {email}")
+        elif current:
+            target.setText(f"{current}{email}")
+        else:
+            target.setText(email)
 
     def _append_signature_html(self, html: str) -> str:
         if not self._signature:
@@ -319,7 +371,19 @@ class ComposeDialog(QDialog):
         self.worker.start()
 
     def _on_sent(self, _) -> None:
-        QMessageBox.information(self, "Enviado", "El correo se envió correctamente.")
+        if self._sent_folder:
+            reply = QMessageBox.question(
+                self,
+                "Correo enviado",
+                "El correo se envió correctamente.\n\n"
+                f"¿Abrir la carpeta «{self._sent_folder}»?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.navigate_sent_folder = self._sent_folder
+        else:
+            QMessageBox.information(self, "Enviado", "El correo se envió correctamente.")
         self.accept()
 
     def _on_error(self, message: str) -> None:

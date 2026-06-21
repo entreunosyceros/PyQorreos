@@ -46,24 +46,32 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.core.account import MailAccount
+from pyqorreos.core.address_book import get_address_book, parse_sender_address
 from pyqorreos.core.classifier import MailCategory, extract_email_address
 from pyqorreos.core.folder_utils import (
     can_delete_folder,
     find_drafts_folder,
     find_trash_folder,
     folder_descendants,
+    is_drafts_folder,
     is_trash_folder,
 )
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.mail_service import MailMessage, MailService, MailSummary, normalize_mail_datetime
 from pyqorreos.core.oauth import AuthMethod, detect_oauth_provider, oauth_not_configured_message
-from pyqorreos.core.reply_utils import ComposeDraft, build_forward, build_reply
+from pyqorreos.core.reply_utils import (
+    ComposeDraft,
+    build_draft_from_message,
+    build_forward,
+    build_reply,
+)
 from pyqorreos.core.settings import Settings
 from pyqorreos.core.translate import language_label
 from pyqorreos.core.user_preferences import UserPreferences, load_preferences, save_preferences
 from pyqorreos.ui.about_dialog import AboutDialog, LOGO_PATH
 from pyqorreos.ui.account_dialog import AccountDialog
 from pyqorreos.ui.accounts_manager_dialog import AccountsManagerDialog
+from pyqorreos.ui.address_book_dialog import AddressBookDialog
 from pyqorreos.ui.action_icons import action_icon, apply_action_icon
 from pyqorreos.ui.attachment_panel import AttachmentPanel
 from pyqorreos.ui.background_sync import BackgroundSyncManager
@@ -212,6 +220,10 @@ class MainWindow(QMainWindow):
         self._ui_narrow = False
         self._manual_refresh_active = False
         self._reader_label_mode = ""
+        self._connection_status = "offline"
+        self._thread_counts: dict[str, int] = {}
+        self._tray_notification: dict[str, str] | None = None
+        self._pending_nav: tuple[str, str, str | None] | None = None
 
         self.setWindowTitle("PyQorreos")
         self.setMinimumSize(720, 580)
@@ -249,8 +261,10 @@ class MainWindow(QMainWindow):
         self.sort_combo.setCurrentIndex(0)
         self.sort_combo.blockSignals(False)
         self._current_page = 0
+        last_folder = self.settings.get_last_folder(account.id) or "INBOX"
+        self._current_folder = last_folder
         self._preload_cached_folders(account.id)
-        self._preload_cached_folder(account.id, "INBOX")
+        self._preload_cached_folder(account.id, last_folder)
         self._background_sync.set_accounts(self.accounts, account.id)
         if self._prefs.background_sync_enabled:
             # Otras cuentas: INBOX en paralelo; la activa se sincroniza al conectar.
@@ -410,10 +424,22 @@ class MainWindow(QMainWindow):
         open_shortcut.activated.connect(self._open_selected_message)
         open_shortcut_enter = QShortcut(QKeySequence(Qt.Key.Key_Enter), self.message_table)
         open_shortcut_enter.activated.connect(self._open_selected_message)
+        mark_read_shortcut = QShortcut(QKeySequence("Ctrl+Shift+U"), self.message_table)
+        mark_read_shortcut.activated.connect(lambda: self._mark_selected_seen(True))
+        mark_unread_shortcut = QShortcut(QKeySequence("Ctrl+U"), self.message_table)
+        mark_unread_shortcut.activated.connect(lambda: self._mark_selected_seen(False))
+        move_shortcut = QShortcut(QKeySequence("Ctrl+Shift+M"), self.message_table)
+        move_shortcut.activated.connect(self._show_move_messages_dialog)
         self.message_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.message_table.customContextMenuRequested.connect(
             self._show_message_context_menu
         )
+        self._empty_list_label = QLabel()
+        self._empty_list_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_list_label.setWordWrap(True)
+        mark_role(self._empty_list_label, "hint")
+        self._empty_list_label.hide()
+        message_layout.addWidget(self._empty_list_label)
         message_layout.addWidget(self.message_table, 1)
 
         # Paginación (50 correos por página)
@@ -532,7 +558,126 @@ class MainWindow(QMainWindow):
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        self._conn_status_label = QLabel()
+        self.status_bar.addPermanentWidget(self._conn_status_label)
+        self._update_connection_status("offline")
         self.status_bar.showMessage("Listo")
+
+    def _update_connection_status(self, state: str) -> None:
+        """Indicador permanente de estado de red en la barra de estado."""
+        labels = {
+            "offline": "Sin conexión",
+            "connecting": "Conectando…",
+            "online": "Conectado",
+            "syncing": "Sincronizando…",
+            "error": "Sin conexión",
+        }
+        colors = {
+            "offline": "#888888",
+            "connecting": "#888888",
+            "online": "#2e7d32",
+            "syncing": "#1565c0",
+            "error": "#c62828",
+        }
+        self._connection_status = state
+        text = labels.get(state, state)
+        color = colors.get(state, "#888888")
+        self._conn_status_label.setText(text)
+        self._conn_status_label.setStyleSheet(f"color: {color}; padding: 0 8px;")
+
+    def _show_folder_column(self) -> bool:
+        return bool(
+            self._prefs.search_all_folders
+            and self.search_edit.text().strip()
+            and self.current_account
+        )
+
+    def _sync_message_table_columns(self) -> None:
+        show_folder = self._show_folder_column()
+        cols = 5 if show_folder else 4
+        if self.message_table.columnCount() != cols:
+            self.message_table.setColumnCount(cols)
+            if show_folder:
+                self.message_table.setHorizontalHeaderLabels(
+                    ["Tipo", "De", "Asunto", "Carpeta", "Fecha"]
+                )
+                header = self.message_table.horizontalHeader()
+                header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+                header.resizeSection(3, 100)
+                header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+                header.resizeSection(4, 118)
+            else:
+                self.message_table.setHorizontalHeaderLabels(
+                    ["Tipo", "De", "Asunto", "Fecha"]
+                )
+                header = self.message_table.horizontalHeader()
+                header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+                header.resizeSection(3, 118)
+
+    def _summary_folder(self, summary: MailSummary) -> str:
+        return summary.folder or self._current_folder
+
+    def _store_tray_notification(
+        self,
+        account_id: str,
+        folder: str,
+        summaries: list[MailSummary],
+    ) -> None:
+        uid = summaries[0].uid if len(summaries) == 1 else ""
+        self._tray_notification = {
+            "account_id": account_id,
+            "folder": folder,
+            "uid": uid,
+        }
+
+    def _on_tray_message_clicked(self) -> None:
+        if self._tray_notification:
+            n = self._tray_notification
+            self._pending_nav = (n["account_id"], n["folder"], n.get("uid") or None)
+        self.show_main_window()
+        self._apply_pending_nav()
+
+    def _apply_pending_nav(self) -> None:
+        if not self._pending_nav:
+            return
+        account_id, folder, uid = self._pending_nav
+        account = next((a for a in self.accounts if a.id == account_id), None)
+        if not account:
+            self._pending_nav = None
+            return
+        if not self.current_account or self.current_account.id != account_id:
+            self._connect_account(account)
+            return
+        if not self.mail_service:
+            return
+        self._pending_nav = None
+        if folder and folder != self._current_folder:
+            self._refresh_folder_tree(select_folder=folder)
+            self._start_folder_sync(folder)
+        if uid:
+            QTimer.singleShot(400, lambda u=uid: self._select_and_open_uid(u))
+
+    def _select_and_open_uid(self, uid: str) -> None:
+        if not hasattr(self, "_message_uids"):
+            return
+        try:
+            row = self._message_uids.index(uid)
+        except ValueError:
+            filtered = self._filtered_messages()
+            for idx, summary in enumerate(filtered):
+                if summary.uid == uid:
+                    page_size = self._page_size()
+                    self._current_page = idx // page_size
+                    self._render_message_table()
+                    row = self._message_uids.index(uid)
+                    break
+            else:
+                return
+        self.message_table.selectRow(row)
+        if is_drafts_folder(self._current_folder):
+            self._open_draft_message(uid)
+        else:
+            self._fetch_selected_message(row=row, force=True)
 
     def eventFilter(self, watched, event) -> bool:
         if watched is self.main_splitter:
@@ -794,6 +939,16 @@ class MainWindow(QMainWindow):
         self._act_forward.setShortcut("Ctrl+L")
         self._act_forward.setToolTip("Reenviar este mensaje (Ctrl+L)")
         self._act_forward.triggered.connect(self._forward)
+
+        self._act_address_book = QAction("Agenda de contactos…", self)
+        self._setup_menu_action(
+            self._act_address_book, "mail", "Agenda de contactos…"
+        )
+        self._act_address_book.setShortcut("Ctrl+Shift+A")
+        self._act_address_book.setToolTip(
+            "Gestionar direcciones de correo habituales (Ctrl+Shift+A)"
+        )
+        self._act_address_book.triggered.connect(self._show_address_book)
 
         self._act_delete = QAction("Eliminar", self)
         self._setup_menu_action(self._act_delete, "trash", "Eliminar")
@@ -1229,6 +1384,12 @@ class MainWindow(QMainWindow):
         copy_sender = menu.addAction("Copiar dirección del remitente")
         copy_sender.triggered.connect(self._copy_sender_address)
 
+        if summary:
+            save_contact = menu.addAction("Guardar remitente en la agenda…")
+            save_contact.triggered.connect(
+                lambda _checked=False, s=summary.sender: self._save_sender_to_address_book(s)
+            )
+
         export_eml = menu.addAction("Exportar como .eml…")
         export_eml.triggered.connect(self._export_selected_eml)
 
@@ -1274,6 +1435,7 @@ class MainWindow(QMainWindow):
 
         correo_menu = menu.addMenu(action_icon("compose"), "Correo")
         correo_menu.addAction(self._act_compose)
+        correo_menu.addAction(self._act_address_book)
         correo_menu.addAction(self._act_reply)
         correo_menu.addAction(self._act_reply_all)
         correo_menu.addAction(self._act_forward)
@@ -1359,6 +1521,7 @@ class MainWindow(QMainWindow):
 
         self._tray = SystemTray(self, LOGO_PATH)
         self._tray.set_menu(self._build_tray_menu())
+        self._tray.signals.message_clicked.connect(self._on_tray_message_clicked)
         self._tray.show()
 
     def show_main_window(self) -> None:
@@ -1452,8 +1615,7 @@ class MainWindow(QMainWindow):
             self._sync_worker.cancel()
             self._stop_thread(self._sync_worker, wait_ms=wait_ms)
         self._sync_worker = None
-        self.sync_progress.setVisible(False)
-        self.btn_cancel_sync.setVisible(False)
+        self._hide_sync_progress()
 
         self._cancel_message_fetch()
         self._folder_unread_timer.stop()
@@ -1563,6 +1725,7 @@ class MainWindow(QMainWindow):
 
         correo_menu = self.menuBar().addMenu("Correo")
         correo_menu.addAction(self._act_compose)
+        correo_menu.addAction(self._act_address_book)
         correo_menu.addAction(self._act_reply)
         correo_menu.addAction(self._act_reply_all)
         correo_menu.addAction(self._act_forward)
@@ -1575,6 +1738,7 @@ class MainWindow(QMainWindow):
         correo_menu.addAction(self._act_mark_normal)
 
         tools_menu = self.menuBar().addMenu("Herramientas")
+        tools_menu.addAction(self._act_address_book)
         tools_menu.addAction(self._act_export_eml)
         tools_menu.addAction(self._act_export_folder)
 
@@ -1591,6 +1755,8 @@ class MainWindow(QMainWindow):
             return
         self._prefs = dialog.get_preferences()
         save_preferences(self._prefs)
+        if self.mail_service:
+            self.mail_service.update_classifier(self.settings.get_classifier())
         self._background_sync.update_preferences(self._prefs)
         self._background_sync.set_accounts(
             self.accounts, self.current_account.id if self.current_account else None
@@ -1865,8 +2031,10 @@ class MainWindow(QMainWindow):
         self.settings.set_last_account_id(account.id)
         self._update_accounts_registry()
         self._refresh_account_combo(account.id)
+        last_folder = self.settings.get_last_folder(account.id) or self._current_folder or "INBOX"
         self._preload_cached_folders(account.id)
-        self._preload_cached_folder(account.id, "INBOX")
+        self._preload_cached_folder(account.id, last_folder)
+        self._update_connection_status("connecting")
         self.status_bar.showMessage(f"Conectando a {account.email}…")
         if block_ui:
             self.setEnabled(False)
@@ -1908,13 +2076,20 @@ class MainWindow(QMainWindow):
             self._refresh_folder_unread_counts()
             self._refresh_storage_quota()
 
-            folder = selected_folder_path(self.folder_tree) or self._current_folder or "INBOX"
+            folder = (
+                selected_folder_path(self.folder_tree)
+                or self.settings.get_last_folder(self.current_account.id)
+                or self._current_folder
+                or "INBOX"
+            )
             self._start_folder_sync(folder)
             self._background_sync.set_accounts(
                 self.accounts, self.current_account.id if self.current_account else None
             )
             self._background_sync.start()
+            self._update_connection_status("online")
             self.status_bar.showMessage(f"Conectado a {self.current_account.email}")
+            self._apply_pending_nav()
         except Exception as exc:
             from pyqorreos.core.network_errors import friendly_mail_error
 
@@ -1924,6 +2099,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self.mail_service = None
+            self._update_connection_status("error")
             self.status_bar.showMessage("Error de conexión")
             QMessageBox.critical(
                 self,
@@ -2183,6 +2359,7 @@ class MainWindow(QMainWindow):
         label = account.email if account else "Cuenta"
         if self._tray:
             title, body = format_new_mail_notification(summaries, folder, label)
+            self._store_tray_notification(account_id, folder, summaries)
             self._tray.show_message(title, body, msecs=5000)
         if (
             self.current_account
@@ -2215,6 +2392,10 @@ class MainWindow(QMainWindow):
         generation = self._sync_generation
         self._manual_refresh_active = same_folder
         self._current_folder = folder
+        if self.current_account:
+            self.settings.set_last_folder(self.current_account.id, folder)
+        if self.mail_service:
+            self._update_connection_status("syncing")
 
         if same_folder:
             cached = self.mail_cache.load_folder(self.current_account.id, folder)
@@ -2269,10 +2450,10 @@ class MainWindow(QMainWindow):
             )
             load_worker.start()
 
-        self.sync_progress.setVisible(True)
-        self.sync_progress.setValue(0)
-        self.sync_progress.setMaximum(0)
         self.btn_cancel_sync.setVisible(True)
+        self.sync_progress.setVisible(False)
+        self.sync_progress.setRange(0, 100)
+        self.sync_progress.setValue(0)
 
         worker = SyncFolderWorker(
             self.mail_service,
@@ -2299,6 +2480,9 @@ class MainWindow(QMainWindow):
         )
         worker.start()
         self._sync_worker = worker
+        worker.finished.connect(
+            lambda g=generation: self._on_sync_thread_finished(g)
+        )
         self._track_worker(worker)
 
     def _cancel_message_fetch(self) -> None:
@@ -2308,14 +2492,30 @@ class MainWindow(QMainWindow):
         self._message_fetch_worker = None
         self._abort_viewer_workers()
 
+    def _hide_sync_progress(self) -> None:
+        self.sync_progress.setVisible(False)
+        self.sync_progress.setRange(0, 100)
+        self.sync_progress.setValue(0)
+        self.btn_cancel_sync.setVisible(False)
+
+    def _show_sync_progress(self, done: int, total: int) -> None:
+        if total <= 0:
+            self.sync_progress.setVisible(False)
+            self.sync_progress.setRange(0, 100)
+            self.sync_progress.setValue(0)
+            return
+        self.sync_progress.setVisible(True)
+        self.sync_progress.setMaximum(total)
+        self.sync_progress.setValue(done)
+        self.sync_progress.setFormat("Nuevos mensajes… %v / %m")
+
     def _cancel_sync(self) -> None:
         self._sync_generation += 1
         if self._sync_worker and self._sync_worker.isRunning():
             self._sync_worker.cancel()
             self._stop_thread(self._sync_worker, wait_ms=2000)
         self._sync_worker = None
-        self.sync_progress.setVisible(False)
-        self.btn_cancel_sync.setVisible(False)
+        self._hide_sync_progress()
 
     def _sync_is_current(self, generation: int, folder: str) -> bool:
         return generation == self._sync_generation and folder == self._current_folder
@@ -2363,31 +2563,35 @@ class MainWindow(QMainWindow):
         if self._current_page == 0 or self._manual_refresh_active:
             self._render_message_table()
 
+    def _on_sync_thread_finished(self, generation: int) -> None:
+        """Red de seguridad: oculta la barra si el hilo terminó sin avisar."""
+        if generation != self._sync_generation:
+            return
+        self._sync_worker = None
+        self._hide_sync_progress()
+
     def _on_sync_progress(
         self, done: int, total: int, generation: int, folder: str
     ) -> None:
         if not self._sync_is_current(generation, folder):
             return
         if total <= 0:
-            self.sync_progress.setMaximum(0)
-            self.sync_progress.setValue(0)
-            self.sync_progress.setFormat("Buscando correo nuevo…")
+            self.sync_progress.setVisible(False)
             self.status_bar.showMessage("Buscando correo nuevo en el servidor…")
             return
-        self.sync_progress.setMaximum(total)
-        self.sync_progress.setValue(done)
-        self.sync_progress.setFormat(f"Nuevos mensajes… %v / %m")
+        self._show_sync_progress(done, total)
         self.status_bar.showMessage(f"Descargando mensajes nuevos… {done} / {total}")
 
     def _on_sync_finished(
         self, result: tuple[list[MailSummary], list[MailSummary]], generation: int, folder: str
     ) -> None:
-        if not self._sync_is_current(generation, folder):
+        if generation != self._sync_generation:
+            return
+        self._sync_worker = None
+        self._hide_sync_progress()
+        if folder != self._current_folder:
             return
         messages, new_summaries = result
-        self._sync_worker = None
-        self.sync_progress.setVisible(False)
-        self.btn_cancel_sync.setVisible(False)
 
         if (
             not messages
@@ -2412,13 +2616,19 @@ class MainWindow(QMainWindow):
                 title, body = format_new_mail_notification(
                     new_summaries, self._current_folder, account_label
                 )
+                if self.current_account:
+                    self._store_tray_notification(
+                        self.current_account.id, self._current_folder, new_summaries
+                    )
                 self._tray.show_message(title, body, msecs=5000)
         else:
             detail = " — sin mensajes nuevos"
+        self._update_connection_status("online")
         self.status_bar.showMessage(
             f"Sincronización completa — {len(messages)} mensajes en {self._current_folder}{detail}"
         )
         self._sync_new_total = 0
+        self._apply_pending_nav()
 
     def _on_sync_error(
         self,
@@ -2426,12 +2636,18 @@ class MainWindow(QMainWindow):
         generation: int | None = None,
         folder: str | None = None,
     ) -> None:
-        if generation is not None and folder is not None:
-            if not self._sync_is_current(generation, folder):
-                return
+        if generation is not None and generation != self._sync_generation:
+            return
         self._sync_worker = None
-        self.sync_progress.setVisible(False)
-        self.btn_cancel_sync.setVisible(False)
+        self._hide_sync_progress()
+        if (
+            generation is not None
+            and folder is not None
+            and folder != self._current_folder
+        ):
+            return
+        if self.mail_service:
+            self._update_connection_status("online")
         self.status_bar.showMessage("Error de sincronización")
         QMessageBox.warning(self, "Error de sincronización", message)
 
@@ -2439,6 +2655,7 @@ class MainWindow(QMainWindow):
         try:
             if generation is not None and generation != self._connect_generation:
                 return
+            self._update_connection_status("error")
             self.status_bar.showMessage("Error de conexión")
             QMessageBox.critical(
                 self,
@@ -2539,10 +2756,13 @@ class MainWindow(QMainWindow):
 
     def _apply_thread_view(self, messages: list[MailSummary]) -> list[MailSummary]:
         if not self._prefs.thread_view:
+            self._thread_counts = {}
             return messages
         latest: dict[str, MailSummary] = {}
+        counts: dict[str, int] = {}
         for summary in messages:
             key = summary.thread_key or summary.uid
+            counts[key] = counts.get(key, 0) + 1
             existing = latest.get(key)
             summary_dt = normalize_mail_datetime(summary.date) or datetime.min
             existing_dt = (
@@ -2552,6 +2772,7 @@ class MainWindow(QMainWindow):
             )
             if not existing or summary_dt > existing_dt:
                 latest[key] = summary
+        self._thread_counts = counts
         return list(latest.values())
 
     def _filtered_messages(self) -> list[MailSummary]:
@@ -2567,19 +2788,24 @@ class MainWindow(QMainWindow):
         unread_only = self.unread_only_check.isChecked()
         sort_by = self._current_sort_key()
 
-        if (
-            query
-            and self.current_account
-            and not self._prefs.thread_view
-        ):
+        search_all = bool(
+            query and self._prefs.search_all_folders and self.current_account
+        )
+        use_db_search = bool(query and self.current_account and (search_all or not self._prefs.thread_view))
+
+        if use_db_search:
+            folder_arg = None if search_all else self._current_folder
             messages = self.mail_cache.query_summaries(
                 self.current_account.id,
-                self._current_folder,
+                folder_arg,
                 query=query,
                 category=category.value if category else None,
                 unread_only=unread_only,
                 sort_by=sort_by,
             )
+            if self._prefs.thread_view:
+                messages = self._apply_thread_view(messages)
+                messages = self._sort_messages(messages)
             return messages
 
         messages = list(self._all_messages)
@@ -2601,16 +2827,32 @@ class MainWindow(QMainWindow):
         """Pinta la tabla con los mensajes de la página actual."""
         if not hasattr(self, "message_table"):
             return
+        self._sync_message_table_columns()
         filtered = self._filtered_messages()
         pages = self._total_pages_for(len(filtered))
         if self._current_page >= pages:
             self._current_page = max(0, pages - 1)
         messages = self._paginated_slice(filtered)
+        show_folder = self._show_folder_column()
         colors = self._category_colors()
         fg = QBrush(self._text_color())
         self.message_table.blockSignals(True)
         self.message_table.setRowCount(0)
         self._message_uids: list[str] = []
+
+        if not filtered:
+            if self.search_edit.text().strip():
+                self._empty_list_label.setText("Ningún mensaje coincide con la búsqueda.")
+            elif not self._all_messages:
+                self._empty_list_label.setText(
+                    f"La carpeta «{self._current_folder}» está vacía.\n"
+                    "Pulsa F5 para sincronizar."
+                )
+            else:
+                self._empty_list_label.setText("Ningún mensaje coincide con los filtros.")
+            self._empty_list_label.show()
+        else:
+            self._empty_list_label.hide()
 
         for summary in messages:
             row = self.message_table.rowCount()
@@ -2621,7 +2863,12 @@ class MainWindow(QMainWindow):
                 f"{summary.category.icon} {summary.category.label}"
             )
             sender_item = QTableWidgetItem(summary.sender)
-            subject_item = QTableWidgetItem(summary.subject or "(Sin asunto)")
+            subject_text = summary.subject or "(Sin asunto)"
+            thread_key = summary.thread_key or summary.uid
+            thread_n = self._thread_counts.get(thread_key, 1)
+            if self._prefs.thread_view and thread_n > 1:
+                subject_text = f"{subject_text} ({thread_n})"
+            subject_item = QTableWidgetItem(subject_text)
             if summary.has_attachments:
                 subject_item.setText(f"📎 {subject_item.text()}")
             date_str = (
@@ -2632,7 +2879,12 @@ class MainWindow(QMainWindow):
             date_item = QTableWidgetItem(date_str)
 
             bg = QBrush(colors.get(summary.category, QColor(255, 255, 255)))
-            for item in (category_item, sender_item, subject_item, date_item):
+            row_items = [category_item, sender_item, subject_item, date_item]
+            if show_folder:
+                folder_item = QTableWidgetItem(self._summary_folder(summary))
+                row_items.insert(3, folder_item)
+
+            for item in row_items:
                 item.setBackground(bg)
                 item.setForeground(fg)
 
@@ -2641,10 +2893,10 @@ class MainWindow(QMainWindow):
                 sender_item.setFont(bold)
                 subject_item.setFont(bold)
 
-            self.message_table.setItem(row, 0, category_item)
-            self.message_table.setItem(row, 1, sender_item)
-            self.message_table.setItem(row, 2, subject_item)
-            self.message_table.setItem(row, 3, date_item)
+            col = 0
+            for item in row_items:
+                self.message_table.setItem(row, col, item)
+                col += 1
 
         self.message_table.clearSelection()
         self.message_table.blockSignals(False)
@@ -2784,6 +3036,9 @@ class MainWindow(QMainWindow):
         if row >= len(self._message_uids):
             return
         uid = self._message_uids[row]
+        if is_drafts_folder(self._current_folder):
+            self._open_draft_message(uid)
+            return
         force = bool(
             self._current_message
             and self._current_message.uid == uid
@@ -2797,6 +3052,31 @@ class MainWindow(QMainWindow):
         ):
             return
         self._fetch_selected_message(row=row, force=force)
+
+    def _open_draft_message(self, uid: str) -> None:
+        """Abre un borrador IMAP en el editor de redacción."""
+        if not self.mail_service or not self.current_account:
+            return
+        folder = self._current_folder
+        worker = FetchMessageWorker(
+            self.mail_service,
+            uid,
+            self.mail_cache,
+            self.current_account.id,
+            folder,
+            delete_after_download=False,
+            refresh_from_server=True,
+        )
+        worker.signals.finished.connect(
+            lambda message: self._compose(
+                build_draft_from_message(message), "Editar borrador"
+            )
+        )
+        worker.signals.error.connect(
+            lambda msg: QMessageBox.warning(self, "Error al abrir borrador", msg)
+        )
+        worker.start()
+        self._track_worker(worker)
 
     def _fetch_selected_message(
         self, *, row: int | None = None, force: bool = False
@@ -2818,6 +3098,12 @@ class MainWindow(QMainWindow):
         ):
             return
 
+        fetch_folder = self._current_folder
+        filtered = self._filtered_messages()
+        summary = next((m for m in filtered if m.uid == uid), None)
+        if summary and summary.folder:
+            fetch_folder = summary.folder
+
         if self.message_table.currentRow() != row:
             self.message_table.blockSignals(True)
             self.message_table.setCurrentCell(row, 0)
@@ -2837,7 +3123,7 @@ class MainWindow(QMainWindow):
             uid,
             self.mail_cache,
             self.current_account.id if self.current_account else "",
-            self._current_folder,
+            fetch_folder,
             delete_after_download=self._prefs.delete_from_server_after_download,
             refresh_from_server=force,
         )
@@ -3452,6 +3738,38 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(addr)
         self.status_bar.showMessage(f"Dirección copiada: {addr}")
 
+    def _show_address_book(self) -> None:
+        dialog = AddressBookDialog(self, book=get_address_book())
+        self._exec_modal(dialog)
+
+    def _save_sender_to_address_book(self, sender: str) -> None:
+        name, email = parse_sender_address(sender)
+        if not email:
+            QMessageBox.information(
+                self,
+                "Agenda",
+                "No se pudo extraer la dirección del remitente.",
+            )
+            return
+        book = get_address_book()
+        existing = book.find_by_email(email)
+        if existing:
+            reply = QMessageBox.question(
+                self,
+                "Agenda",
+                f"«{email}» ya está en la agenda.\n¿Actualizar el nombre y marcarlo como importante?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            book.upsert(email, name=name, important=True)
+            book.save()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Agenda", str(exc))
+            return
+        self.status_bar.showMessage(f"Guardado en la agenda: {email}")
+
     @staticmethod
     def _format_bytes(size: int) -> str:
         if size < 1024:
@@ -3725,8 +4043,13 @@ class MainWindow(QMainWindow):
             drafts_folder=find_drafts_folder(self._folder_names),
             snippets=self._prefs.compose_snippets,
             request_read_receipt_default=self._prefs.compose_request_read_receipt,
+            folder_names=self._folder_names,
+            address_book=get_address_book(),
         )
         self._exec_modal(dialog)
+        if dialog.navigate_sent_folder:
+            self._refresh_folder_tree(select_folder=dialog.navigate_sent_folder)
+            self._start_folder_sync(dialog.navigate_sent_folder)
 
     def _reply(self) -> None:
         if not self._message_loaded_for_selection() or not self.current_account:
@@ -3790,9 +4113,9 @@ class MainWindow(QMainWindow):
         else:
             self.status_bar.showMessage(f"Eliminando {count} mensajes…")
             self.sync_progress.setVisible(True)
-            self.sync_progress.setMaximum(0)
+            self.sync_progress.setRange(0, count)
             self.sync_progress.setValue(0)
-            self.sync_progress.setFormat("Eliminando mensajes…")
+            self.sync_progress.setFormat("Eliminando mensajes… %v / %m")
 
         for btn in self._list_action_buttons:
             btn.setEnabled(False)
@@ -3821,7 +4144,7 @@ class MainWindow(QMainWindow):
         self._track_worker(worker)
 
     def _finish_delete_ui(self) -> None:
-        self.sync_progress.setVisible(False)
+        self._hide_sync_progress()
         self._update_message_actions()
 
     def _on_delete_error(self, message: str) -> None:

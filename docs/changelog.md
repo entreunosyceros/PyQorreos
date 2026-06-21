@@ -6,6 +6,21 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ---
 
+## Consistencia funcional (reciente)
+
+- **Agenda de contactos** local: guardar y recuperar direcciones habituales sin penalizar sync ni arranque.
+- **Estado de conexión** visible de forma permanente en la barra de estado.
+- **Última carpeta** por cuenta recordada entre sesiones.
+- Búsqueda unificada con vista de hilos; opción de **buscar en todas las carpetas**.
+- **Borradores editables** desde la carpeta Borradores; tras enviar, opción de ver Enviados.
+- Pestaña **Clasificación** en Preferencias para gestionar reglas aprendidas.
+- **Clic en notificación** de bandeja del sistema para abrir el mensaje o carpeta.
+- Atajos `Ctrl+U`, `Ctrl+Shift+U` y `Ctrl+Shift+M` en la lista de mensajes.
+- Estados vacíos en la lista cuando no hay correos o no hay coincidencias.
+- **Reintentos** ante fallos transitorios de red en conexión, sincronización y envío.
+- **Tests** unitarios en `tests/` (retry, caché, carpetas, errores de red, composición).
+- **Barra de progreso de sincronización**: solo visible al descargar mensajes nuevos; se oculta al terminar (corrección de barra siempre activa).
+
 ## Proveedores, rendimiento y pulido (reciente)
 
 - **Acuse de recibo** opcional al redactar (solicitud MDN al enviar); preferencia por defecto en General → Redacción.
@@ -28,8 +43,8 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ## Arranque y sincronización
 
-- **Al abrir la aplicación** se muestra de inmediato la caché local de INBOX y el árbol de carpetas (sin esperar a IMAP).
-- En paralelo se **conecta al servidor** y se **descargan cabeceras nuevas** de la carpeta activa.
+- **Al abrir** se muestra de inmediato la caché local y el árbol de carpetas (sin esperar a IMAP).
+- Con cuentas ya configuradas, la app **conecta y descarga correo nuevo** al abrir (carpeta activa de la última sesión).
 - Si la sincronización en segundo plano está activa (Preferencias → General), el **INBOX del resto de cuentas** también se actualiza al arrancar.
 - La ventana **no se bloquea** durante la conexión inicial: puedes ver la caché mientras llega el correo nuevo.
 
@@ -80,6 +95,10 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 | Archivo | Función |
 |---------|---------|
+| `tests/` | Pruebas unitarias (`pytest`) |
+| `pyqorreos/core/address_book.py` | Agenda de contactos en JSON (carga diferida) |
+| `pyqorreos/ui/address_book_dialog.py` | Gestión y selección de contactos |
+| `pyqorreos/ui/classification_rules_widget.py` | Editor de reglas importante/spam en Preferencias |
 | `pyqorreos/ui/theme.py` | Tema claro/oscuro y estilos globales |
 | `pyqorreos/core/network_errors.py` | Mensajes de error legibles |
 | `pyqorreos/core/email_charset.py` | Normalización de charsets MIME (`unknown-8bit`, etc.) |

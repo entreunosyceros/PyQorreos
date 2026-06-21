@@ -20,7 +20,7 @@ Guías y referencia del proyecto. Empieza por [Instalación](installation.md) o 
 | [Estructura del proyecto](project-structure.md) | Árbol de carpetas y módulos |
 | [Configuración y notas](configuration.md) | Archivos de datos, Gmail, Hotmail, MSN, AOL, privacidad… |
 | [Pilares de calidad](quality-pillars.md) | Rendimiento, robustez y calidad visual |
-| [Historial de cambios](changelog.md) | Mejoras recientes (AOL, Hotmail, MSN, rendimiento…) |
+| [Historial de cambios](changelog.md) | Mejoras recientes (consistencia funcional, rendimiento…) |
 
 ---
 

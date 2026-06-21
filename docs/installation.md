@@ -8,6 +8,7 @@
 - PySide6 (incluye Qt WebEngine para el visor HTML)
 - keyring
 - deep-translator (traducción de mensajes bajo demanda)
+- pytest (opcional, para ejecutar las pruebas en `tests/`)
 
 ## Instalación recomendada
 
@@ -25,6 +26,13 @@ python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python main.py
+```
+
+## Ejecutar tests (opcional)
+
+```bash
+pip install -r requirements.txt
+python -m pytest tests/ -q
 ```
 
 ---

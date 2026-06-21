@@ -15,6 +15,7 @@ from pyqorreos.core.classifier import MailClassifier
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.mail_service import IMAP_BATCH_SIZE, MailFolder, MailMessage, MailService, MailSummary
 from pyqorreos.core.network_errors import friendly_mail_error
+from pyqorreos.core.retry import call_with_retry
 
 
 class WorkerSignals(QObject):
@@ -57,11 +58,15 @@ class ConnectWorker(QThread):
         try:
             if self._cancelled:
                 return
-            service.connect()
+
+            def _connect_and_list() -> list[str]:
+                service.connect()
+                folders = service.list_folders()
+                return [f.name for f in folders]
+
+            names = call_with_retry(_connect_and_list)
             if self._cancelled:
                 return
-            folders = service.list_folders()
-            names = [f.name for f in folders]
             self.signals.finished.emit(names)
         except Exception as exc:
             if not self._cancelled:
@@ -120,77 +125,83 @@ class SyncFolderWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.service.select_folder(self.folder)
-            if self.fresh_mailbox:
-                self.service.poke_mailbox()
-            cached = self.cache.load_folder(self.account_id, self.folder)
-            cached_map = {summary.uid: summary for summary in cached}
-            initial_uids = set(cached_map.keys())
 
-            uids = self.service.search_all_uids()
-            server_order = [
-                uid.decode("ascii", errors="replace")
-                if isinstance(uid, bytes)
-                else str(uid)
-                for uid in uids
-            ]
-            server_uid_set = set(server_order)
+            def _sync() -> tuple[list[MailSummary], list[MailSummary]]:
+                self.service.select_folder(self.folder)
+                if self.fresh_mailbox:
+                    self.service.poke_mailbox()
+                cached = self.cache.load_folder(self.account_id, self.folder)
+                cached_map = {summary.uid: summary for summary in cached}
+                initial_uids = set(cached_map.keys())
 
-            def on_batch_ui(batch: list[MailSummary], done: int, total: int) -> None:
+                uids = self.service.search_all_uids()
+                server_order = [
+                    uid.decode("ascii", errors="replace")
+                    if isinstance(uid, bytes)
+                    else str(uid)
+                    for uid in uids
+                ]
+                server_uid_set = set(server_order)
+
+                def on_batch_ui(batch: list[MailSummary], done: int, total: int) -> None:
+                    if self._cancelled:
+                        return
+                    for summary in batch:
+                        cached_map[summary.uid] = summary
+                    if batch:
+                        try:
+                            start_index = server_order.index(batch[0].uid)
+                        except ValueError:
+                            start_index = max(0, done - len(batch))
+                        self.cache.save_batch(
+                            self.account_id, self.folder, batch, start_index
+                        )
+                    self.signals.batch_ready.emit((batch, done, total))
+                    self.signals.progress.emit(done, total)
+
+                all_summaries = self.service.sync_folder_incremental(
+                    cached_map,
+                    batch_size=self.batch_size,
+                    cancelled=lambda: self._cancelled,
+                    on_batch=on_batch_ui,
+                    on_progress=lambda done, total: self.signals.progress.emit(
+                        done, total
+                    ),
+                )
+
                 if self._cancelled:
-                    return
-                for summary in batch:
-                    cached_map[summary.uid] = summary
-                if batch:
-                    try:
-                        start_index = server_order.index(batch[0].uid)
-                    except ValueError:
-                        start_index = max(0, done - len(batch))
-                    self.cache.save_batch(
-                        self.account_id, self.folder, batch, start_index
+                    return [], []
+
+                by_uid = {summary.uid: summary for summary in all_summaries}
+                for summary in self.cache.load_folder(self.account_id, self.folder):
+                    if summary.uid in server_uid_set and summary.uid not in by_uid:
+                        by_uid[summary.uid] = summary
+                all_summaries = [
+                    by_uid[uid] for uid in server_order if uid in by_uid
+                ]
+
+                if server_order and not all_summaries:
+                    raise RuntimeError(
+                        f"No se pudieron leer los mensajes de {self.folder}. "
+                        "Pulsa F5 para reintentar."
                     )
-                self.signals.batch_ready.emit((batch, done, total))
-                self.signals.progress.emit(done, total)
 
-            all_summaries = self.service.sync_folder_incremental(
-                cached_map,
-                batch_size=self.batch_size,
-                cancelled=lambda: self._cancelled,
-                on_batch=on_batch_ui,
-                on_progress=lambda done, total: self.signals.progress.emit(
-                    done, total
-                ),
-            )
+                removed = self.service.last_removed_uids
+                if removed:
+                    self.cache.remove_uids(self.account_id, self.folder, removed)
 
+                if all_summaries:
+                    self.cache.save_folder_ordered(
+                        self.account_id, self.folder, all_summaries
+                    )
+                new_summaries = [
+                    s for s in all_summaries if s.uid not in initial_uids
+                ]
+                return all_summaries, new_summaries
+
+            all_summaries, new_summaries = call_with_retry(_sync)
             if self._cancelled:
                 return
-
-            # Combinar con la caché actual (p. ej. sync en background paralelo).
-            by_uid = {summary.uid: summary for summary in all_summaries}
-            for summary in self.cache.load_folder(self.account_id, self.folder):
-                if summary.uid in server_uid_set and summary.uid not in by_uid:
-                    by_uid[summary.uid] = summary
-            all_summaries = [
-                by_uid[uid] for uid in server_order if uid in by_uid
-            ]
-
-            if server_order and not all_summaries:
-                raise RuntimeError(
-                    f"No se pudieron leer los mensajes de {self.folder}. "
-                    "Pulsa F5 para reintentar."
-                )
-
-            removed = self.service.last_removed_uids
-            if removed:
-                self.cache.remove_uids(self.account_id, self.folder, removed)
-
-            if all_summaries:
-                self.cache.save_folder_ordered(
-                    self.account_id, self.folder, all_summaries
-                )
-            new_summaries = [
-                s for s in all_summaries if s.uid not in initial_uids
-            ]
             self.signals.finished.emit((all_summaries, new_summaries))
         except Exception as exc:
             if not self._cancelled:
@@ -394,16 +405,19 @@ class SendMailWorker(QThread):
 
     def run(self) -> None:
         try:
-            self.service.send_message(
-                self.to,
-                self.subject,
-                self.body,
-                self.cc,
-                self.bcc,
-                body_html=self.body_html,
-                attachments=self.attachments,
-                request_read_receipt=self.request_read_receipt,
-            )
+            def _send() -> None:
+                self.service.send_message(
+                    self.to,
+                    self.subject,
+                    self.body,
+                    self.cc,
+                    self.bcc,
+                    body_html=self.body_html,
+                    attachments=self.attachments,
+                    request_read_receipt=self.request_read_receipt,
+                )
+
+            call_with_retry(_send)
             self.signals.finished.emit(True)
         except Exception as exc:
             self.signals.error.emit(friendly_mail_error(exc))

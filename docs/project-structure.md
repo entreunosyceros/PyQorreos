@@ -11,6 +11,7 @@ PyQorreos/
 ├── run_app.py              # Lanzador recomendado (venv + deps)
 ├── main.py                 # Entrada alternativa
 ├── requirements.txt
+├── tests/                  # Pruebas unitarias (pytest)
 ├── docs/                   # Documentación (esta carpeta)
 └── pyqorreos/
     ├── core/
@@ -18,6 +19,8 @@ PyQorreos/
     │   ├── mail_service.py         # Cliente IMAP/SMTP
     │   ├── mail_cache.py           # Caché SQLite de cabeceras y cuerpos
     │   ├── classifier.py           # Clasificación spam / importante
+    │   ├── address_book.py           # Agenda de contactos (JSON local)
+    │   ├── retry.py                # Reintentos ante fallos transitorios de red
     │   ├── email_html.py           # Preparación HTML para lectura
     │   ├── email_charset.py        # Charsets MIME (unknown-8bit, etc.)
     │   ├── translate.py            # Traducción de mensajes (deep-translator)
@@ -46,7 +49,9 @@ PyQorreos/
         ├── account_dialog.py       # Alta/edición de una cuenta
         ├── accounts_manager_dialog.py
         ├── about_dialog.py
-        ├── preferences_dialog.py   # Preferencias (general + plantillas)
+        ├── preferences_dialog.py   # Preferencias (general, plantillas, clasificación, OAuth)
+        ├── address_book_dialog.py    # Agenda de contactos
+        ├── classification_rules_widget.py  # Editor de reglas importante/spam
         ├── background_sync.py      # IDLE y sync en segundo plano
         ├── notification_utils.py   # Texto de notificaciones de correo nuevo
         ├── folder_tree_widget.py   # Árbol de carpetas

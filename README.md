@@ -1,6 +1,6 @@
 <img width="1408" height="768" alt="PyQorreos" src="https://github.com/user-attachments/assets/19640ae3-ae11-419d-b033-9e1ee7fbcfc2" />
 
-# PyQorreos
+# PyQorreos V.0.1.0
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python&logoColor=white)
 ![PySide6](https://img.shields.io/badge/UI-PySide6-green?style=flat-square&logo=qt&logoColor=white)
@@ -28,9 +28,13 @@ Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**.
 
 - **Varias cuentas** IMAP/SMTP (Gmail, Outlook, Hotmail, MSN, AOL, Yahoo, hosting / dominio propio)
 - **Bandeja de tres paneles** con sync incremental, caché local y clasificación spam/importante
-- **Al arrancar**: caché al instante + descarga de correo nuevo del servidor
+- **Al arrancar**: caché al instante, **última carpeta** por cuenta y descarga de correo nuevo
+- **Estado de conexión** permanente y barra de progreso solo al descargar mensajes nuevos
 - **Visor HTML** (WebEngine), imágenes remotas bajo demanda, traducción y anti-phishing
+- **Borradores editables**, búsqueda multi-carpeta, notificaciones con clic para abrir
+- **Agenda de contactos** local (direcciones habituales; sin impacto en sync)
 - **OAuth2** (Gmail / Microsoft), presets por proveedor y tema claro/oscuro
+- **Tests** unitarios en `tests/` (`pytest`)
 
 [Listista completa de características →](docs/features.md)
 
@@ -58,6 +62,7 @@ Para que todo quede claro, en la siguiente tabla se puede consultar toda la docu
 | [Configuración y notas](docs/configuration.md) | Archivos de datos, Gmail, Hotmail, MSN, AOL, privacidad… |
 | [Pilares de calidad](docs/quality-pillars.md) | Rendimiento, robustez y aspecto visual |
 | [Historial de cambios](docs/changelog.md) | Mejoras recientes |
+| [Tests](../tests/) | Pruebas unitarias (`pytest`) |
 
 ## Licencia
 

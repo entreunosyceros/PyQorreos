@@ -99,7 +99,27 @@ class Settings:
         """Guarda el ID de la última cuenta usada sin machacar la lista de cuentas."""
         data = self._read_raw_json()
         data["last_account_id"] = account_id
-        
+
+        ACCOUNTS_FILE.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def get_last_folder(self, account_id: str) -> str | None:
+        data = self._read_raw_json()
+        folders = data.get("last_folders") or {}
+        if not isinstance(folders, dict):
+            return None
+        folder = folders.get(account_id)
+        return str(folder) if folder else None
+
+    def set_last_folder(self, account_id: str, folder: str) -> None:
+        data = self._read_raw_json()
+        folders = data.get("last_folders")
+        if not isinstance(folders, dict):
+            folders = {}
+        folders[str(account_id)] = folder
+        data["last_folders"] = folders
         ACCOUNTS_FILE.write_text(
             json.dumps(data, indent=2, ensure_ascii=False),
             encoding="utf-8",

@@ -104,6 +104,30 @@ def find_drafts_folder(folders: list[str]) -> str | None:
     return None
 
 
+SENT_KEYWORDS = ("sent", "enviado", "outbox")
+
+
+def is_sent_folder(name: str) -> bool:
+    leaf = folder_leaf(name)
+    return any(k in leaf for k in SENT_KEYWORDS) or leaf in (
+        "sent items",
+        "sent mail",
+        "sent messages",
+        "elementos enviados",
+        "mensajes enviados",
+    )
+
+
+def find_sent_folder(folders: list[str]) -> str | None:
+    for name in folders:
+        if is_sent_folder(name):
+            return name
+    for name in folders:
+        if folder_leaf(name) in ("sent", "sent items", "enviados"):
+            return name
+    return None
+
+
 def find_trash_folder(folders: list[str]) -> str | None:
     for name in folders:
         if is_trash_folder(name):

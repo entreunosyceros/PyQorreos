@@ -16,6 +16,7 @@ Objetivo: que una carpeta con decenas de miles de correos siga siendo usable al 
 | Búsqueda en SQLite (asunto/remitente) con debounce | Implementado |
 | Sin recargar toda la carpeta en cada lote de sincronización | Implementado |
 | Paginación solo en UI (no descarga todo el cuerpo) | Ya existía |
+| Agenda de contactos en JSON (carga solo al redactar o abrir agenda) | Implementado |
 | Índice FTS / búsqueda en cuerpo del mensaje | Pendiente |
 | Actualización incremental de caché sin reescribir carpeta entera | Pendiente |
 
@@ -32,8 +33,8 @@ Objetivo: fallos de red o servidor que no bloqueen la interfaz y den mensajes cl
 | Reconexión IMAP (`ensure_connected`) | Ya existía |
 | Límite y aviso de adjuntos grandes al enviar | Implementado |
 | Limpieza de adjuntos temporales al salir | Implementado |
-| Reintentos automáticos en sync/envío | Pendiente |
-| Tests automatizados de escenarios de fallo | Pendiente |
+| Reintentos automáticos en sync/envío | Implementado |
+| Tests automatizados de escenarios de fallo | Implementado (pytest en `tests/`) |
 
 ## Calidad visual
 
@@ -44,6 +45,7 @@ Objetivo: aspecto coherente y profesional.
 | Iconos y espaciado unificados en todos los diálogos | Implementado (`theme.py`) |
 | Tema claro / oscuro (Preferencias → Apariencia) | Implementado |
 | Hoja de estilos global (menús, tablas, barras, botones) | Implementado |
+| Barra de progreso de sync solo con descarga real de mensajes nuevos | Implementado |
 | Tema del visor HTML de correos (sigue el del mensaje) | Pendiente |
 
 ## Arranque
