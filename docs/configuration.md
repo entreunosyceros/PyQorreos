@@ -9,7 +9,8 @@
 | `~/.config/pyqorreos/accounts.json` | Cuentas configuradas (`last_account_id`, `last_folders` por cuenta) |
 | `~/.config/pyqorreos/classification.json` | Reglas de clasificación (también editables en Preferencias → Clasificación) |
 | `~/.config/pyqorreos/contacts.json` | Agenda de contactos (correo, nombre, notas) |
-| `~/.config/pyqorreos/preferences.json` | Preferencias (sync, imágenes, hilos, búsqueda multi-carpeta, idioma de traducción, **tema**, plantillas…) |
+| `~/.config/pyqorreos/preferences.json` | Preferencias (sync, imágenes, hilos, búsqueda multi-carpeta, idioma de traducción, **tema**, plantillas, **OpenPGP**…) |
+| `~/.config/pyqorreos/gnupg/` | Llavero GnuPG de PyQorreos (si no usas `~/.gnupg` del sistema) |
 | `~/.config/pyqorreos/mail_cache.db` | Caché local de correos |
 | `~/.config/pyqorreos/oauth_clients.json` | Client ID y secret OAuth (Gmail / Microsoft) |
 | Llavero del sistema | Contraseñas y tokens OAuth (vía `keyring`) |
@@ -80,6 +81,15 @@ El `refresh_token` se guarda en el llavero de forma permanente; el `access_token
 - Al **enviar**: marca «Solicitar acuse de recibo» en el editor, o activa **Solicitar acuse de recibo al enviar por defecto** en **Archivo → Preferencias → General → Redacción**.
 - Al **recibir**: si el remitente lo pidió, el visor muestra un aviso con **Enviar acuse** o **Descartar**. El acuse se envía por SMTP como notificación MDN estándar.
 - Gmail y otros clientes pueden ignorar la solicitud o preguntar al usuario antes de enviar el acuse.
+
+### OpenPGP
+
+- Instala **GnuPG** en el sistema (`gpg`) y el paquete Python `python-gnupg` (`pip install -r requirements.txt`).
+- Activa OpenPGP en **Archivo → Preferencias → General → OpenPGP**. La sincronización de bandeja **no** se ve afectada.
+- Importa claves en **Herramientas → Claves OpenPGP…** (públicas de destinatarios y tu clave privada para firmar/descifrar).
+- Por defecto las claves viven en `~/.config/pyqorreos/gnupg`. Marca **Usar el llavero GnuPG del sistema** para compartir con `~/.gnupg`.
+- La frase de paso la pide **gpg-agent** al firmar o descifrar; PyQorreos no la almacena.
+- Si desactivas **Guardar cuerpos descifrados en caché**, los mensajes cifrados no guardan el texto plano en SQLite (se vuelven a descifrar al abrir).
 
 ### Carpetas IMAP
 

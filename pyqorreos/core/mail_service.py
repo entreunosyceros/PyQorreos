@@ -41,6 +41,13 @@ from pyqorreos.core.network_errors import friendly_mail_error
 IMAP_SOCKET_TIMEOUT = 60
 SMTP_SOCKET_TIMEOUT = 120
 from pyqorreos.core.folder_utils import normalize_thread_subject
+from pyqorreos.core.openpgp import (
+    OpenPgpSettings,
+    PgpStatus,
+    encrypt_outgoing_message,
+    parse_recipient_emails,
+    process_incoming_message,
+)
 from pyqorreos.core.message_attachments import (
     MailAttachmentInfo,
     extract_attachments,
@@ -134,6 +141,7 @@ class MailMessage:
     unsubscribe_mailto: str | None = None
     one_click_unsubscribe: bool = False
     read_receipt_to: str = ""
+    pgp: PgpStatus | None = None
 
 
 def _decode_header_value(value: str | None) -> str:
@@ -820,14 +828,22 @@ class MailService:
         folder: str | None = None,
         load_remote_images: bool = False,
         mark_seen: bool = True,
+        openpgp: OpenPgpSettings | None = None,
     ) -> MailMessage:
         target_folder = folder or self._current_folder
         flags_raw, raw = self._fetch_raw_message(
             uid, target_folder, mark_seen=mark_seen
         )
 
-        msg = email.message_from_bytes(raw)
+        pgp_settings = openpgp or OpenPgpSettings()
+        msg, pgp_status = process_incoming_message(
+            raw, settings=pgp_settings
+        )
+
         text, html = _extract_body(msg)
+        if pgp_status.encrypted and pgp_status.error:
+            text = f"[Mensaje cifrado OpenPGP]\n\n{pgp_status.error}"
+            html = ""
         attachments = extract_attachments(msg)
         subject = _decode_header_value(msg.get("Subject")) or "(Sin asunto)"
         sender = _decode_header_value(msg.get("From")) or "(Sin remitente)"
@@ -873,6 +889,7 @@ class MailService:
             unsubscribe_mailto=unsub.get("mailto") if isinstance(unsub.get("mailto"), str) else None,
             one_click_unsubscribe=bool(unsub.get("one_click")),
             read_receipt_to=parse_read_receipt_request(msg),
+            pgp=pgp_status if (pgp_status.encrypted or pgp_status.signed) else None,
         )
 
     def send_read_receipt(
@@ -1005,6 +1022,10 @@ class MailService:
         body_html: str | None = None,
         attachments: list[EmailAttachment] | None = None,
         request_read_receipt: bool = False,
+        *,
+        openpgp_sign: bool = False,
+        openpgp_encrypt: bool = False,
+        openpgp_settings: OpenPgpSettings | None = None,
     ) -> None:
         msg = EmailMessage()
         from_header = (
@@ -1049,6 +1070,19 @@ class MailService:
                 )
         else:
             msg.set_content(plain, charset="utf-8")
+
+        recipients = parse_recipient_emails(to, cc, bcc)
+        pgp = openpgp_settings or OpenPgpSettings()
+        if pgp.enabled and (openpgp_sign or openpgp_encrypt):
+            raw_out = encrypt_outgoing_message(
+                msg,
+                recipients=recipients,
+                sign=openpgp_sign,
+                encrypt=openpgp_encrypt,
+                signing_key_id=pgp.signing_key_id,
+                use_system_home=pgp.use_system_gnupg_home,
+            )
+            msg = email.message_from_bytes(raw_out)
 
         recipients = [a.strip() for a in f"{to},{cc},{bcc}".split(",") if a.strip()]
         self._deliver_message(msg, recipients)

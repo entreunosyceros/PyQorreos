@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from pyqorreos.core.account import is_microsoft_email
 from pyqorreos.core.address_book import AddressBook
 from pyqorreos.core.folder_utils import find_sent_folder
+from pyqorreos.core.openpgp import OpenPgpSettings, openpgp_available
 from pyqorreos.core.compose_email import EmailAttachment, build_draft_bytes, prepare_outgoing_html
 from pyqorreos.core.compose_utils import (
     body_mentions_attachment,
@@ -60,6 +61,10 @@ class ComposeDialog(QDialog):
         request_read_receipt_default: bool = False,
         folder_names: list[str] | None = None,
         address_book: AddressBook | None = None,
+        openpgp_enabled: bool = False,
+        openpgp_sign_default: bool = False,
+        openpgp_encrypt_default: bool = False,
+        openpgp_settings: object | None = None,
     ) -> None:
         super().__init__(parent)
         self.service = service
@@ -68,6 +73,12 @@ class ComposeDialog(QDialog):
         self._drafts_folder = drafts_folder
         self._folder_names = folder_names or []
         self._address_book = address_book
+        self._openpgp_enabled = openpgp_enabled and openpgp_available()
+        self._openpgp_settings = (
+            openpgp_settings
+            if isinstance(openpgp_settings, OpenPgpSettings)
+            else OpenPgpSettings()
+        )
         self._sent_folder = find_sent_folder(self._folder_names)
         self.navigate_sent_folder: str | None = None
         self._snippets = snippets or list(DEFAULT_COMPOSE_SNIPPETS)
@@ -161,6 +172,20 @@ class ComposeDialog(QDialog):
             )
         self.read_receipt_check.setToolTip(receipt_tip)
         layout.addWidget(self.read_receipt_check)
+
+        if self._openpgp_enabled:
+            pgp_row = QHBoxLayout()
+            self.openpgp_sign_check = QCheckBox("Firmar (OpenPGP)")
+            self.openpgp_sign_check.setChecked(openpgp_sign_default)
+            self.openpgp_encrypt_check = QCheckBox("Cifrar (OpenPGP)")
+            self.openpgp_encrypt_check.setChecked(openpgp_encrypt_default)
+            pgp_row.addWidget(self.openpgp_sign_check)
+            pgp_row.addWidget(self.openpgp_encrypt_check)
+            pgp_row.addStretch()
+            layout.addLayout(pgp_row)
+        else:
+            self.openpgp_sign_check = None
+            self.openpgp_encrypt_check = None
 
         buttons = QDialogButtonBox()
         self.draft_btn = QPushButton("Guardar borrador")
@@ -355,6 +380,10 @@ class ComposeDialog(QDialog):
                     return
 
         self.setEnabled(False)
+        sign = bool(self.openpgp_sign_check and self.openpgp_sign_check.isChecked())
+        encrypt = bool(
+            self.openpgp_encrypt_check and self.openpgp_encrypt_check.isChecked()
+        )
         self.worker = SendMailWorker(
             self.service,
             to,
@@ -365,6 +394,9 @@ class ComposeDialog(QDialog):
             body_html=html,
             attachments=list(self._attachments),
             request_read_receipt=self.read_receipt_check.isChecked(),
+            openpgp_sign=sign,
+            openpgp_encrypt=encrypt,
+            openpgp_settings=self._openpgp_settings,
         )
         self.worker.signals.finished.connect(self._on_sent)
         self.worker.signals.error.connect(self._on_error)

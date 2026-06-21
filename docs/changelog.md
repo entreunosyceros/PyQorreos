@@ -8,6 +8,7 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ## Consistencia funcional (reciente)
 
+- **OpenPGP opcional** (GnuPG): cifrar/firmar al enviar, descifrar/verificar al leer; gestión de claves en Herramientas.
 - **Agenda de contactos** local: guardar y recuperar direcciones habituales sin penalizar sync ni arranque.
 - **Estado de conexión** visible de forma permanente en la barra de estado.
 - **Última carpeta** por cuenta recordada entre sesiones.

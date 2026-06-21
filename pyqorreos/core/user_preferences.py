@@ -39,6 +39,13 @@ class UserPreferences:
     theme: str = "light"
     compose_request_read_receipt: bool = False
     search_all_folders: bool = False
+    openpgp_enabled: bool = False
+    openpgp_auto_decrypt: bool = True
+    openpgp_sign_by_default: bool = False
+    openpgp_encrypt_by_default: bool = False
+    openpgp_use_system_gnupg_home: bool = False
+    openpgp_signing_key_id: str = ""
+    openpgp_cache_decrypted_bodies: bool = True
 
     def to_dict(self) -> dict:
         return asdict(self)

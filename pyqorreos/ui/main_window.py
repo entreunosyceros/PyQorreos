@@ -59,6 +59,7 @@ from pyqorreos.core.folder_utils import (
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.mail_service import MailMessage, MailService, MailSummary, normalize_mail_datetime
 from pyqorreos.core.oauth import AuthMethod, detect_oauth_provider, oauth_not_configured_message
+from pyqorreos.core.openpgp import OpenPgpSettings, pgp_status_summary, settings_from_user_prefs
 from pyqorreos.core.reply_utils import (
     ComposeDraft,
     build_draft_from_message,
@@ -79,6 +80,7 @@ from pyqorreos.ui.compose_dialog import ComposeDialog
 from pyqorreos.ui.folder_tree_widget import populate_folder_tree, selected_folder_path
 from pyqorreos.ui.message_viewer import MessageViewer
 from pyqorreos.ui.notification_utils import format_new_mail_notification
+from pyqorreos.ui.openpgp_keys_dialog import OpenPgpKeysDialog
 from pyqorreos.ui.preferences_dialog import PreferencesDialog
 from pyqorreos.ui.system_tray import SystemTray
 from pyqorreos.ui.theme import (
@@ -950,6 +952,12 @@ class MainWindow(QMainWindow):
         )
         self._act_address_book.triggered.connect(self._show_address_book)
 
+        self._act_openpgp_keys = QAction("Claves OpenPGP…", self)
+        self._setup_menu_action(
+            self._act_openpgp_keys, "settings", "Claves OpenPGP…"
+        )
+        self._act_openpgp_keys.triggered.connect(self._show_openpgp_keys)
+
         self._act_delete = QAction("Eliminar", self)
         self._setup_menu_action(self._act_delete, "trash", "Eliminar")
         self._act_delete.setShortcut("Delete")
@@ -1739,6 +1747,7 @@ class MainWindow(QMainWindow):
 
         tools_menu = self.menuBar().addMenu("Herramientas")
         tools_menu.addAction(self._act_address_book)
+        tools_menu.addAction(self._act_openpgp_keys)
         tools_menu.addAction(self._act_export_eml)
         tools_menu.addAction(self._act_export_folder)
 
@@ -3066,6 +3075,7 @@ class MainWindow(QMainWindow):
             folder,
             delete_after_download=False,
             refresh_from_server=True,
+            openpgp_settings=self._openpgp_settings(),
         )
         worker.signals.finished.connect(
             lambda message: self._compose(
@@ -3126,6 +3136,7 @@ class MainWindow(QMainWindow):
             fetch_folder,
             delete_after_download=self._prefs.delete_from_server_after_download,
             refresh_from_server=force,
+            openpgp_settings=self._openpgp_settings(),
         )
         worker.signals.finished.connect(
             lambda message, g=generation: self._display_message(message, g)
@@ -3220,6 +3231,11 @@ class MainWindow(QMainWindow):
             f"Para: {message.recipients}\n"
             f"Categoría: {message.category.icon} {message.category.label}\n"
             f"{date_str}"
+            + (
+                f"\n{pgp_status_summary(message.pgp)}"
+                if message.pgp and pgp_status_summary(message.pgp)
+                else ""
+            )
         )
 
         self.attachment_panel.set_attachments(message.attachments)
@@ -3738,6 +3754,16 @@ class MainWindow(QMainWindow):
         QApplication.clipboard().setText(addr)
         self.status_bar.showMessage(f"Dirección copiada: {addr}")
 
+    def _openpgp_settings(self) -> OpenPgpSettings:
+        return settings_from_user_prefs(self._prefs)
+
+    def _show_openpgp_keys(self) -> None:
+        dialog = OpenPgpKeysDialog(
+            self,
+            use_system_home=self._prefs.openpgp_use_system_gnupg_home,
+        )
+        self._exec_modal(dialog)
+
     def _show_address_book(self) -> None:
         dialog = AddressBookDialog(self, book=get_address_book())
         self._exec_modal(dialog)
@@ -4045,6 +4071,10 @@ class MainWindow(QMainWindow):
             request_read_receipt_default=self._prefs.compose_request_read_receipt,
             folder_names=self._folder_names,
             address_book=get_address_book(),
+            openpgp_enabled=self._prefs.openpgp_enabled,
+            openpgp_sign_default=self._prefs.openpgp_sign_by_default,
+            openpgp_encrypt_default=self._prefs.openpgp_encrypt_by_default,
+            openpgp_settings=self._openpgp_settings(),
         )
         self._exec_modal(dialog)
         if dialog.navigate_sent_folder:

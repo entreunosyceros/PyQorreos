@@ -97,6 +97,7 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - **Acuse de recibo** opcional al enviar (cabecera `Disposition-Notification-To`; el cliente del destinatario decide si responde); preferencia para activarlo por defecto al redactar
 - Aviso en el lector cuando un mensaje recibido solicita acuse, con botones **Enviar acuse** / **Descartar**
 - Envío HTML + texto plano por SMTP
+- **OpenPGP opcional** (GnuPG): cifrar y firmar al enviar; descifrar y verificar al leer (sin impacto en la sincronización)
 - Borradores precargados al responder o reenviar (cita HTML del mensaje original)
 - Guardar borrador en la carpeta Drafts del servidor
 - **Abrir y editar borradores** desde la carpeta Borradores (doble clic)
@@ -110,6 +111,17 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Gestión en **Correo → Agenda de contactos…** o **Herramientas → Agenda de contactos…** (`Ctrl+Shift+A`)
 - **Clic derecho** en un mensaje → «Guardar remitente en la agenda…»
 - Contactos con nombre, notas y marca **importante** (aparecen primero en la lista)
+
+## OpenPGP (cifrado de extremo a extremo)
+
+- **Opcional** y desacoplado de la sincronización: solo actúa al abrir o enviar mensajes protegidos
+- Requiere **GnuPG** (`gpg`) en el sistema y el paquete Python `python-gnupg`
+- Preferencias en **Archivo → Preferencias → General → OpenPGP**: activar, descifrado automático, firmar/cifrar por defecto, clave de firma, caché de cuerpos descifrados
+- **Herramientas → Claves OpenPGP…** (o botón en Preferencias) para importar y listar claves
+- Al redactar: casillas **Firmar** y **Cifrar** si OpenPGP está activo
+- Al leer: resumen en metadatos del mensaje (cifrado, firma válida o error)
+- Llavero de claves propio en `~/.config/pyqorreos/gnupg` o el de sistema (`~/.gnupg`) si lo eliges en preferencias
+- La frase de paso de claves privadas la gestiona **gpg-agent** (no se guarda en PyQorreos)
 
 ## Rendimiento y estabilidad
 

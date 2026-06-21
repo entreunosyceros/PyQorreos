@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from pyqorreos.core.settings import Settings
 from pyqorreos.core.oauth_clients import (
     OAUTH_CLIENTS_FILE,
     OAUTH_REDIRECT_URI,
@@ -39,6 +38,8 @@ from pyqorreos.core.oauth_clients import (
     save_oauth_clients_data,
     validate_oauth_clients_data,
 )
+from pyqorreos.core.openpgp import openpgp_available, openpgp_unavailable_reason
+from pyqorreos.core.settings import Settings
 from pyqorreos.core.user_preferences import (
     DEFAULT_COMPOSE_SNIPPETS,
     UserPreferences,
@@ -47,6 +48,7 @@ from pyqorreos.core.user_preferences import (
 from pyqorreos.core.translate import TRANSLATION_LANGUAGES, language_label
 from pyqorreos.ui.theme import mark_role, prevent_context_menu
 from pyqorreos.ui.classification_rules_widget import ClassificationRulesWidget
+from pyqorreos.ui.openpgp_keys_dialog import OpenPgpKeysDialog
 
 
 _PREFERENCES_TAB_INDEX = {
@@ -155,6 +157,57 @@ class PreferencesDialog(QDialog):
 
         layout.addWidget(compose_group)
 
+        openpgp_group = QGroupBox("OpenPGP (cifrado de extremo a extremo)")
+        openpgp_form = QFormLayout(openpgp_group)
+
+        self.openpgp_enabled = QCheckBox("Activar OpenPGP (solo al leer o enviar mensajes protegidos)")
+        self.openpgp_enabled.setChecked(self._prefs.openpgp_enabled)
+        self.openpgp_enabled.setToolTip(
+            "No afecta a la sincronización ni a la velocidad de la bandeja. "
+            "Requiere GnuPG (gpg) instalado en el sistema."
+        )
+        openpgp_form.addRow(self.openpgp_enabled)
+
+        if not openpgp_available():
+            pgp_warn = QLabel(openpgp_unavailable_reason())
+            pgp_warn.setWordWrap(True)
+            mark_role(pgp_warn, "hint")
+            openpgp_form.addRow(pgp_warn)
+
+        self.openpgp_auto_decrypt = QCheckBox("Descifrar automáticamente al abrir")
+        self.openpgp_auto_decrypt.setChecked(self._prefs.openpgp_auto_decrypt)
+        openpgp_form.addRow(self.openpgp_auto_decrypt)
+
+        self.openpgp_sign_default = QCheckBox("Firmar al enviar por defecto")
+        self.openpgp_sign_default.setChecked(self._prefs.openpgp_sign_by_default)
+        openpgp_form.addRow(self.openpgp_sign_default)
+
+        self.openpgp_encrypt_default = QCheckBox("Cifrar al enviar por defecto")
+        self.openpgp_encrypt_default.setChecked(self._prefs.openpgp_encrypt_by_default)
+        openpgp_form.addRow(self.openpgp_encrypt_default)
+
+        self.openpgp_use_system_home = QCheckBox(
+            "Usar claves del sistema (~/.gnupg) en lugar del almacén de PyQorreos"
+        )
+        self.openpgp_use_system_home.setChecked(self._prefs.openpgp_use_system_gnupg_home)
+        openpgp_form.addRow(self.openpgp_use_system_home)
+
+        self.openpgp_cache_decrypted = QCheckBox(
+            "Guardar cuerpos descifrados en la caché local (más rápido al reabrir)"
+        )
+        self.openpgp_cache_decrypted.setChecked(self._prefs.openpgp_cache_decrypted_bodies)
+        openpgp_form.addRow(self.openpgp_cache_decrypted)
+
+        self.openpgp_signing_key = QLineEdit(self._prefs.openpgp_signing_key_id)
+        self.openpgp_signing_key.setPlaceholderText("Huella o ID de clave (vacío = predeterminada)")
+        openpgp_form.addRow("Clave para firmar:", self.openpgp_signing_key)
+
+        keys_btn = QPushButton("Gestionar claves…")
+        keys_btn.clicked.connect(self._open_openpgp_keys)
+        openpgp_form.addRow(keys_btn)
+
+        layout.addWidget(openpgp_group)
+
         download_group = QGroupBox("Descarga de mensajes")
         download_form = QFormLayout(download_group)
 
@@ -260,6 +313,13 @@ class PreferencesDialog(QDialog):
 
         scroll.setWidget(page)
         return scroll
+
+    def _open_openpgp_keys(self) -> None:
+        dialog = OpenPgpKeysDialog(
+            self,
+            use_system_home=self.openpgp_use_system_home.isChecked(),
+        )
+        dialog.exec()
 
     def _build_classification_tab(self) -> QWidget:
         page = QWidget()
@@ -560,4 +620,11 @@ class PreferencesDialog(QDialog):
             theme=self.theme_combo.currentData(),
             compose_request_read_receipt=self.compose_read_receipt.isChecked(),
             search_all_folders=self.search_all_folders.isChecked(),
+            openpgp_enabled=self.openpgp_enabled.isChecked(),
+            openpgp_auto_decrypt=self.openpgp_auto_decrypt.isChecked(),
+            openpgp_sign_by_default=self.openpgp_sign_default.isChecked(),
+            openpgp_encrypt_by_default=self.openpgp_encrypt_default.isChecked(),
+            openpgp_use_system_gnupg_home=self.openpgp_use_system_home.isChecked(),
+            openpgp_signing_key_id=self.openpgp_signing_key.text().strip(),
+            openpgp_cache_decrypted_bodies=self.openpgp_cache_decrypted.isChecked(),
         )

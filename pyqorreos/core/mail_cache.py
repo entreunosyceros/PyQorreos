@@ -15,6 +15,7 @@ from pathlib import Path
 from pyqorreos.core.classifier import MailCategory
 from pyqorreos.core.mail_service import MailMessage, MailSummary, normalize_mail_datetime
 from pyqorreos.core.message_attachments import MailAttachmentInfo
+from pyqorreos.core.openpgp import PgpStatus
 from pyqorreos.core.settings import CONFIG_DIR
 
 CACHE_DB = CONFIG_DIR / "mail_cache.db"
@@ -132,6 +133,7 @@ class MailCache:
             ("attachments_json", "TEXT NOT NULL DEFAULT '[]'"),
             ("message_id", "TEXT NOT NULL DEFAULT ''"),
             ("read_receipt_to", "TEXT NOT NULL DEFAULT ''"),
+            ("pgp_json", "TEXT NOT NULL DEFAULT ''"),
         ):
             if col not in body_cols:
                 conn.execute(f"ALTER TABLE message_bodies ADD COLUMN {col} {ddl}")
@@ -434,14 +436,19 @@ class MailCache:
             [a.to_dict() for a in (message.attachments or [])],
             ensure_ascii=False,
         )
+        pgp_json = (
+            json.dumps(message.pgp.to_dict(), ensure_ascii=False)
+            if message.pgp
+            else ""
+        )
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO message_bodies
                 (account_id, folder, uid, subject, sender, recipients, date_iso,
                  body_text, body_html, category, attachments_json, message_id,
-                 read_receipt_to, fetched_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 read_receipt_to, fetched_at, pgp_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     account_id,
@@ -458,6 +465,7 @@ class MailCache:
                     message.message_id,
                     message.read_receipt_to or "",
                     datetime.now().isoformat(),
+                    pgp_json,
                 ),
             )
 
@@ -469,7 +477,7 @@ class MailCache:
                 """
                 SELECT uid, subject, sender, recipients, date_iso,
                        body_text, body_html, category, attachments_json, message_id,
-                       read_receipt_to
+                       read_receipt_to, pgp_json
                 FROM message_bodies
                 WHERE account_id = ? AND folder = ? AND uid = ?
                 """,
@@ -491,6 +499,12 @@ class MailCache:
             attachments = [MailAttachmentInfo.from_dict(a) for a in json.loads(raw_att)]
         except (json.JSONDecodeError, TypeError, KeyError):
             attachments = []
+        pgp = None
+        if "pgp_json" in row.keys() and row["pgp_json"]:
+            try:
+                pgp = PgpStatus.from_dict(json.loads(row["pgp_json"]))
+            except (json.JSONDecodeError, TypeError):
+                pgp = None
         return MailMessage(
             uid=row["uid"],
             subject=row["subject"],
@@ -503,6 +517,7 @@ class MailCache:
             attachments=attachments,
             message_id=row["message_id"] or "",
             read_receipt_to=row["read_receipt_to"] or "",
+            pgp=pgp,
         )
 
     def delete_message(self, account_id: str, folder: str, uid: str) -> None:

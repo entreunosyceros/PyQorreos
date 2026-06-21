@@ -15,6 +15,7 @@ from pyqorreos.core.classifier import MailClassifier
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.mail_service import IMAP_BATCH_SIZE, MailFolder, MailMessage, MailService, MailSummary
 from pyqorreos.core.network_errors import friendly_mail_error
+from pyqorreos.core.openpgp import OpenPgpSettings
 from pyqorreos.core.retry import call_with_retry
 
 
@@ -221,6 +222,7 @@ class FetchMessageWorker(QThread):
         delete_after_download: bool = False,
         load_remote_images: bool = False,
         refresh_from_server: bool = False,
+        openpgp_settings: OpenPgpSettings | None = None,
     ) -> None:
         super().__init__()
         self.service = service
@@ -232,6 +234,7 @@ class FetchMessageWorker(QThread):
         self.delete_after_download = delete_after_download
         self.load_remote_images = load_remote_images
         self.refresh_from_server = refresh_from_server
+        self.openpgp_settings = openpgp_settings or OpenPgpSettings()
         self.signals = WorkerSignals()
 
     def _maybe_delete_from_server(self) -> None:
@@ -271,11 +274,21 @@ class FetchMessageWorker(QThread):
                 folder=self.folder or None,
                 load_remote_images=self.load_remote_images,
                 mark_seen=self.mark_seen,
+                openpgp=self.openpgp_settings,
             )
             if self.cache and self.account_id and self.folder:
-                self.cache.save_message_body(
-                    self.account_id, self.folder, message
-                )
+                save_body = True
+                if (
+                    self.openpgp_settings.enabled
+                    and message.pgp
+                    and message.pgp.encrypted
+                    and not self.openpgp_settings.cache_decrypted_bodies
+                ):
+                    save_body = False
+                if save_body:
+                    self.cache.save_message_body(
+                        self.account_id, self.folder, message
+                    )
                 if self.mark_seen:
                     self.cache.update_seen(
                         self.account_id, self.folder, self.uid, True
@@ -390,6 +403,9 @@ class SendMailWorker(QThread):
         body_html: str | None = None,
         attachments: list | None = None,
         request_read_receipt: bool = False,
+        openpgp_sign: bool = False,
+        openpgp_encrypt: bool = False,
+        openpgp_settings: OpenPgpSettings | None = None,
     ) -> None:
         super().__init__()
         self.service = service
@@ -401,6 +417,9 @@ class SendMailWorker(QThread):
         self.body_html = body_html
         self.attachments = attachments or []
         self.request_read_receipt = request_read_receipt
+        self.openpgp_sign = openpgp_sign
+        self.openpgp_encrypt = openpgp_encrypt
+        self.openpgp_settings = openpgp_settings or OpenPgpSettings()
         self.signals = WorkerSignals()
 
     def run(self) -> None:
@@ -415,6 +434,9 @@ class SendMailWorker(QThread):
                     body_html=self.body_html,
                     attachments=self.attachments,
                     request_read_receipt=self.request_read_receipt,
+                    openpgp_sign=self.openpgp_sign,
+                    openpgp_encrypt=self.openpgp_encrypt,
+                    openpgp_settings=self.openpgp_settings,
                 )
 
             call_with_retry(_send)
