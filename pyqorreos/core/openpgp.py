@@ -35,6 +35,16 @@ _INLINE_ENCRYPTED = re.compile(
     r"-----BEGIN PGP MESSAGE-----",
     re.IGNORECASE,
 )
+_INLINE_ENCRYPTED_END = re.compile(
+    r"-----END PGP MESSAGE-----",
+    re.IGNORECASE,
+)
+_INLINE_SIGNED_END = re.compile(
+    r"-----END PGP SIGNATURE-----",
+    re.IGNORECASE,
+)
+_PGP_SIGN_PROTOCOL = "application/pgp-signature"
+_PGP_ENCRYPT_PROTOCOL = "application/pgp-encrypted"
 
 
 @dataclass
@@ -55,7 +65,7 @@ class PgpStatus:
             "signer": self.signer,
             "error": self.error,
         }
-
+# Tests para la conversión de PgpStatus a diccionario
     @classmethod
     def from_dict(cls, data: dict | None) -> PgpStatus:
         if not isinstance(data, dict):
@@ -68,7 +78,7 @@ class PgpStatus:
             error=str(data.get("error", "")),
         )
 
-
+# Tests para la configuración de OpenPGP
 @dataclass
 class OpenPgpSettings:
     """Preferencias OpenPGP efectivas al procesar un mensaje."""
@@ -81,15 +91,15 @@ class OpenPgpSettings:
     signing_key_id: str = ""
     cache_decrypted_bodies: bool = True
 
-
+# Tests para la verificación de la disponibilidad del binario de GPG
 def gpg_binary_available() -> bool:
     return bool(shutil.which("gpg"))
 
-
+# Tests para la verificación de la disponibilidad de OpenPGP
 def openpgp_available() -> bool:
     return _HAS_GNUPG and gpg_binary_available()
 
-
+# Tests para la obtención del motivo de la falta de disponibilidad de OpenPGP
 def openpgp_unavailable_reason() -> str:
     if not _HAS_GNUPG:
         return "Falta el paquete Python «python-gnupg». Instálalo con pip."
@@ -97,7 +107,7 @@ def openpgp_unavailable_reason() -> str:
         return "No se encontró el programa «gpg» (GnuPG) en el sistema."
     return ""
 
-
+# Tests para la obtención de la ruta de la carpeta de GPG
 def gnupg_home(use_system: bool) -> Path:
     if use_system:
         return Path.home() / ".gnupg"
@@ -105,7 +115,7 @@ def gnupg_home(use_system: bool) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
 
-
+# Tests para la obtención de la instancia de GPG
 def get_gpg(use_system_home: bool = False) -> Any | None:
     if not openpgp_available():
         return None
@@ -114,58 +124,129 @@ def get_gpg(use_system_home: bool = False) -> Any | None:
     home.mkdir(parents=True, exist_ok=True)
     return gnupg.GPG(gnupghome=str(home), gpgbinary=shutil.which("gpg") or "gpg")
 
+# Tests para la obtención de la instancia de GPG
+def get_gpg(use_system_home: bool = False) -> Any | None:
+    if not openpgp_available():
+        return None
+    assert gnupg is not None
+    home = gnupg_home(use_system_home)
+    home.mkdir(parents=True, exist_ok=True)
+    try:
+        return gnupg.GPG(gnupghome=str(home), gpgbinary=shutil.which("gpg") or "gpg")
+    except (FileNotFoundError, OSError):
+        return None
+
+# Tests para la extracción de protocolos PGP
+def _mime_protocol(msg: Message) -> str:
+    param = msg.get_param("protocol")
+    if param:
+        return str(param).lower().strip('"')
+    raw = str(msg.get("Content-Type", "") or "")
+    match = re.search(r'protocol\s*=\s*"?([^";\s]+)"?', raw, re.IGNORECASE)
+    if match:
+        return match.group(1).lower()
+    return ""
+
+# Tests para la verificación de protocolos PGP firmados
+def _is_pgp_signed_protocol(msg: Message) -> bool:
+    proto = _mime_protocol(msg)
+    if not proto:
+        return True
+    return proto.startswith(_PGP_SIGN_PROTOCOL)
+
+# Tests para la verificación de protocolos PGP cifrados
+def _is_pgp_encrypted_protocol(msg: Message) -> bool:
+    proto = _mime_protocol(msg)
+    if not proto:
+        return True
+    return proto.startswith(_PGP_ENCRYPT_PROTOCOL)
+
+
+def _classify_inline_armor(payload: str) -> str | None:
+    """Clasifica armadura inline: inline, signed (clearsign) o corrupt."""
+    if _INLINE_ENCRYPTED.search(payload):
+        if _INLINE_ENCRYPTED_END.search(payload):
+            return "inline"
+        return "corrupt"
+    if _ARMOR_BEGIN.search(payload):
+        if "BEGIN PGP SIGNED MESSAGE" in payload.upper():
+            if _INLINE_SIGNED_END.search(payload):
+                return "signed"
+            return "corrupt"
+        return "signed"
+    return None
+
 
 def classify_mime_message(msg: Message) -> str:
     """
     Clasifica el mensaje MIME.
 
-    Devuelve: encrypted | signed | inline | none
+    Devuelve: encrypted | signed | inline | corrupt | none
     """
-    ctype = (msg.get_content_type() or "").lower()
+    try:
+        ctype = (msg.get_content_type() or "").lower()
+    except Exception:
+        ctype = ""
     if ctype == "multipart/encrypted":
+        if not _is_pgp_encrypted_protocol(msg):
+            return "none"
         return "encrypted"
     if ctype == "multipart/signed":
+        if not _is_pgp_signed_protocol(msg):
+            return "none"
         return "signed"
-    if ctype in ("application/pgp-encrypted", "application/octet-stream"):
+    if ctype in ("application/pgp-encrypted",):
         return "encrypted"
     if ctype == "application/pgp-signature":
         return "signed"
+    if ctype == "application/octet-stream":
+        if "encrypted" in str(msg.get("Content-Description", "")).lower():
+            return "encrypted"
     payload = _message_text_payload(msg)
-    if payload and _ARMOR_BEGIN.search(payload):
-        if _INLINE_ENCRYPTED.search(payload):
-            return "inline"
-        return "signed"
+    if payload:
+        inline_kind = _classify_inline_armor(payload)
+        if inline_kind:
+            return inline_kind
     if msg.is_multipart():
         for part in msg.walk():
-            ptype = (part.get_content_type() or "").lower()
-            if ptype in ("application/pgp-encrypted", "application/octet-stream"):
+            try:
+                ptype = (part.get_content_type() or "").lower()
+            except Exception:
+                continue
+            if ptype in ("application/pgp-encrypted",):
+                return "encrypted"
+            if ptype == "application/octet-stream":
                 if "encrypted" in str(part.get("Content-Description", "")).lower():
                     return "encrypted"
             if ptype == "application/pgp-signature":
                 return "signed"
     return "none"
 
-
+# Tests para la extracción de texto del cuerpo del mensaje
 def _message_text_payload(msg: Message) -> str:
-    if msg.is_multipart():
-        for part in msg.walk():
-            if part.get_content_maintype() == "multipart":
-                continue
-            if "attachment" in str(part.get("Content-Disposition", "")).lower():
-                continue
-            payload = part.get_payload(decode=True)
-            if payload:
-                try:
-                    return payload.decode("utf-8", errors="replace")
-                except (AttributeError, UnicodeDecodeError):
+    try:
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_maintype() == "multipart":
                     continue
+                if "attachment" in str(part.get("Content-Disposition", "")).lower():
+                    continue
+                payload = part.get_payload(decode=True)
+                if payload:
+                    try:
+                        return payload.decode("utf-8", errors="replace")
+                    except (AttributeError, UnicodeDecodeError):
+                        continue
+            return ""
+        payload = msg.get_payload(decode=True)
+        if not payload:
+            return ""
+        return payload.decode("utf-8", errors="replace")
+    except Exception:
         return ""
-    payload = msg.get_payload(decode=True)
-    if not payload:
-        return ""
-    return payload.decode("utf-8", errors="replace")
 
 
+# Tests para la extracción de bytes cifrados
 def _extract_encrypted_bytes(msg: Message) -> bytes | None:
     if msg.get_content_type() == "multipart/encrypted":
         octet: bytes | None = None
@@ -202,7 +283,19 @@ def _signed_parts(msg: Message) -> tuple[bytes | None, bytes | None]:
         signature if isinstance(signature, bytes) else None,
     )
 
+# Tests para la asignación de mensajes de error de GPG
+def _map_gpg_status(status: str) -> str:
+    text = (status or "").strip()
+    lower = text.lower()
+    if "cancel" in lower or "pinentry" in lower and "closed" in lower:
+        return "Descifrado cancelado"
+    if "public key" in lower or "no pub" in lower or "unknown key" in lower:
+        return "Clave pública desconocida"
+    if "timeout" in lower or "timed out" in lower:
+        return "Tiempo de espera agotado"
+    return text or "Error de OpenPGP"
 
+# Tests para la verificación de mensajes firmados
 def verify_signed_message(
     msg: Message,
     *,
@@ -211,23 +304,36 @@ def verify_signed_message(
     status = PgpStatus(signed=True)
     gpg = get_gpg(use_system_home)
     if gpg is None:
-        status.error = openpgp_unavailable_reason()
+        status.error = openpgp_unavailable_reason() or "OpenPGP no disponible"
         status.signature_valid = False
         return status
     signed, signature = _signed_parts(msg)
-    if signed is None:
-        text = _message_text_payload(msg)
-        if text and "BEGIN PGP SIGNED MESSAGE" in text:
-            verified = gpg.verify(text)
+    try:
+        if signed is None:
+            text = _message_text_payload(msg)
+            if text and "BEGIN PGP SIGNED MESSAGE" in text:
+                verified = gpg.verify(text)
+            else:
+                status.error = "No se encontró la parte firmada"
+                status.signature_valid = False
+                return status
+        elif signature is not None:
+            verified = gpg.verify(signed, signature)
         else:
-            status.error = "No se encontró la parte firmada"
+            status.error = "Firma PGP incompleta"
             status.signature_valid = False
             return status
-    elif signature is not None:
-        verified = gpg.verify(signed, signature)
-    else:
-        status.error = "Firma PGP incompleta"
+    except TimeoutError:
         status.signature_valid = False
+        status.error = "Tiempo de espera agotado al verificar la firma"
+        return status
+    except FileNotFoundError:
+        status.signature_valid = False
+        status.error = openpgp_unavailable_reason() or "OpenPGP no disponible"
+        return status
+    except OSError as exc:
+        status.signature_valid = False
+        status.error = _map_gpg_status(str(exc))
         return status
     if not hasattr(verified, "valid"):
         status.signature_valid = False
@@ -237,10 +343,15 @@ def verify_signed_message(
     if verified.valid:
         status.signer = str(getattr(verified, "username", "") or "")
     else:
-        status.error = str(getattr(verified, "status", "") or "Firma no válida")
+        status.error = _map_gpg_status(
+            str(getattr(verified, "status", "") or "Firma no válida")
+        )
     return status
 
 
+verify_signature = verify_signed_message
+
+# Tests para el descifrado de mensajes PGP/MIME o inline
 def decrypt_message(
     msg: Message,
     *,
@@ -255,15 +366,25 @@ def decrypt_message(
     status = PgpStatus(encrypted=True)
     gpg = get_gpg(use_system_home)
     if gpg is None:
-        status.error = openpgp_unavailable_reason()
+        status.error = openpgp_unavailable_reason() or "OpenPGP no disponible"
         return None, status
     ciphertext = _extract_encrypted_bytes(msg)
     if not ciphertext:
         status.error = "No se encontró contenido cifrado"
         return None, status
-    decrypted = gpg.decrypt(ciphertext, passphrase=passphrase)
+    try:
+        decrypted = gpg.decrypt(ciphertext, passphrase=passphrase)
+    except TimeoutError:
+        status.error = "Tiempo de espera agotado al descifrar"
+        return None, status
+    except FileNotFoundError:
+        status.error = openpgp_unavailable_reason() or "OpenPGP no disponible"
+        return None, status
+    except OSError as exc:
+        status.error = _map_gpg_status(str(exc))
+        return None, status
     if not decrypted.ok:
-        status.error = str(decrypted.status or "Error al descifrar")
+        status.error = _map_gpg_status(str(decrypted.status or "Error al descifrar"))
         return None, status
     data = decrypted.data
     if isinstance(data, str):
@@ -279,7 +400,7 @@ def decrypt_message(
         status.signer = str(decrypted.username or "")
     return inner, status
 
-
+# Tests para el procesamiento de mensajes entrantes cuando OpenPGP está habilitado
 def process_incoming_message(
     raw: bytes,
     *,
@@ -299,6 +420,12 @@ def process_incoming_message(
     kind = classify_mime_message(msg)
     if kind == "none":
         return msg, PgpStatus()
+
+    if kind == "corrupt":
+        return msg, PgpStatus(
+            encrypted=True,
+            error="Mensaje OpenPGP inline dañado o incompleto",
+        )
 
     if kind in ("encrypted", "inline"):
         if not settings.auto_decrypt:
@@ -327,10 +454,10 @@ def process_incoming_message(
             msg, use_system_home=settings.use_system_gnupg_home
         )
         return msg, status
-
+# Tests para el procesamiento de mensajes entrantes cuando OpenPGP está deshabilitado
     return msg, PgpStatus()
 
-
+    # Tests para la解析 de direcciones de correo electrónico de destinatarios
 def parse_recipient_emails(*fields: str) -> list[str]:
     addresses: list[str] = []
     seen: set[str] = set()
@@ -381,7 +508,7 @@ def encrypt_outgoing_message(
         return data.encode("utf-8")
     return bytes(data)
 
-
+# Tests para la lista de claves públicas OpenPGP
 def list_public_keys(use_system_home: bool = False) -> list[dict[str, str]]:
     gpg = get_gpg(use_system_home)
     if gpg is None:
@@ -398,7 +525,7 @@ def list_public_keys(use_system_home: bool = False) -> list[dict[str, str]]:
         )
     return keys
 
-
+# Tests para la lista de claves privadas OpenPGP
 def list_secret_keys(use_system_home: bool = False) -> list[dict[str, str]]:
     gpg = get_gpg(use_system_home)
     if gpg is None:
@@ -414,7 +541,7 @@ def list_secret_keys(use_system_home: bool = False) -> list[dict[str, str]]:
         )
     return keys
 
-
+# Tests para la importación de claves OpenPGP desde un archivo
 def import_key_file(path: str, use_system_home: bool = False) -> tuple[int, str]:
     gpg = get_gpg(use_system_home)
     if gpg is None:
@@ -425,7 +552,7 @@ def import_key_file(path: str, use_system_home: bool = False) -> tuple[int, str]
         return 0, "No se importó ninguna clave"
     return count, ""
 
-
+# Tests para la generación de un resumen del estado OpenPGP
 def pgp_status_summary(status: PgpStatus) -> str:
     parts: list[str] = []
     if status.encrypted:
