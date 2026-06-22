@@ -18,7 +18,7 @@ need dh
 need python3
 
 echo "==> Construyendo paquete Debian de PyQorreos…"
-echo "    (descarga PySide6 en el venv; puede tardar varios minutos)"
+echo "    (solo código fuente; run_app.py crea .venv al primer arranque)"
 echo
 
 # Limpiar artefactos previos en el directorio padre.

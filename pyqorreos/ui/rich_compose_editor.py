@@ -17,9 +17,11 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QColorDialog,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
+    QLabel,
     QMessageBox,
     QTextEdit,
     QToolBar,
@@ -27,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyqorreos.ui.spell_check import ComposeSpellChecker, SpellCheckTextEdit, SpellLanguage
 from pyqorreos.ui.theme import apply_compose_editor_theme, resolve_theme_from_parent
 
 
@@ -54,7 +57,28 @@ class RichComposeEditor(QWidget):
         self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         layout.addWidget(self.toolbar)
 
-        self.editor = QTextEdit()
+        spell_row = QHBoxLayout()
+        spell_row.setContentsMargins(4, 0, 4, 0)
+        spell_row.addWidget(QLabel("Ortografía:"))
+        self.spell_lang_combo = QComboBox()
+        self.spell_lang_combo.addItem("Español", "es")
+        self.spell_lang_combo.addItem("English", "en")
+        self.spell_lang_combo.addItem("ES + EN", "both")
+        self.spell_lang_combo.setToolTip(
+            "Idioma del corrector ortográfico mientras escribes"
+        )
+        self.spell_lang_combo.currentIndexChanged.connect(self._on_spell_language_changed)
+        spell_row.addWidget(self.spell_lang_combo)
+        spell_row.addStretch(1)
+        layout.addLayout(spell_row)
+
+        self._spell_checker = ComposeSpellChecker(language="both")
+        self.editor = SpellCheckTextEdit(self._spell_checker)
+        if not self._spell_checker.available:
+            self.spell_lang_combo.setEnabled(False)
+            self.spell_lang_combo.setToolTip(
+                "Instala pyspellchecker (pip install pyspellchecker) para activar el corrector"
+            )
         self.editor.setAcceptRichText(True)
         self.editor.setPlaceholderText("Escribe tu mensaje aquí…")
         self.editor.setMinimumHeight(220)
@@ -131,6 +155,15 @@ class RichComposeEditor(QWidget):
         clear_action.setToolTip("Quitar formato de la selección")
         clear_action.triggered.connect(self._clear_format)
         self.toolbar.addAction(clear_action)
+
+    def _on_spell_language_changed(self, _index: int) -> None:
+        lang = self.spell_lang_combo.currentData()
+        if lang in ("es", "en", "both"):
+            self.editor.set_spell_language(lang)
+
+    def set_spell_language(self, language: SpellLanguage) -> None:
+        idx = {"es": 0, "en": 1, "both": 2}.get(language, 2)
+        self.spell_lang_combo.setCurrentIndex(idx)
 
     def _cursor(self) -> QTextCursor:
         return self.editor.textCursor()

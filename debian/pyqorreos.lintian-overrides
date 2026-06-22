@@ -1,12 +1,2 @@
-# PySide6/Qt WebEngine: librerías de terceros en el venv privado.
-pyqorreos: embedded-library
-pyqorreos: unstripped-binary-or-object
-pyqorreos: shared-library-lacks-prerequisites
-pyqorreos: executable-not-elf-or-script
-pyqorreos: wrong-path-for-interpreter
-pyqorreos: unusual-interpreter
-pyqorreos: script-not-executable
-pyqorreos: missing-dependency-on-libc
-pyqorreos: package-has-unnecessary-activation-of-ldconfig-trigger
 pyqorreos: no-manual-page
 pyqorreos: initial-upload-closes-no-bugs

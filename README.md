@@ -33,17 +33,30 @@ Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**.
 - **Visor HTML** (WebEngine), imágenes remotas bajo demanda, traducción y anti-phishing
 - **Borradores editables**, búsqueda multi-carpeta, notificaciones con clic para abrir
 - **Agenda de contactos** local (direcciones habituales; sin impacto en sync)
+- **Corrector ortográfico** al redactar (español / inglés)
 - **OAuth2** (Gmail / Microsoft), presets por proveedor y tema claro/oscuro
+- **Instalador `.deb`** para Debian/Ubuntu — ver [Instalación](docs/installation.md#paquete-debian-deb)
 - **Tests** unitarios en `tests/` (`pytest`)
 
 [Listista completa de características →](docs/features.md)
 
 ## Inicio rápido
 
+**Desde el código fuente:**
+
 ```bash
 cd PyQorreos
 python run_app.py
 ```
+
+**En Debian/Ubuntu** (paquete `.deb` desde [Releases](https://github.com/entreunosyceros/PyQorreos/releases)):
+
+```bash
+sudo apt install ./pyqorreos_0.1.0-3_all.deb
+pyqorreos
+```
+
+Detalles, primer arranque y desinstalación: [Instalación](docs/installation.md#paquete-debian-deb).
 
 `run_app.py` crea el entorno virtual, instala dependencias y arranca la app. Si ya tienes cuentas configuradas, **se conecta y descarga correo nuevo al abrir**; la primera vez: **Cuenta → Gestionar cuentas**.
 
@@ -55,7 +68,7 @@ Para que todo quede claro, en la siguiente tabla se puede consultar toda la docu
 |------|-------------|
 | [**Índice de documentación**](docs/README.md) | Punto de entrada a toda la documentación |
 | [Características](docs/features.md) | Funcionalidades detalladas |
-| [Instalación](docs/installation.md) | Requisitos e instalación manual |
+| [Instalación](docs/installation.md) | Requisitos, código fuente y paquete `.deb` |
 | [Uso rápido](docs/usage.md) | Primeros pasos en la interfaz |
 | [Atajos de teclado](docs/keyboard-shortcuts.md) | Referencia de atajos |
 | [Estructura del proyecto](docs/project-structure.md) | Módulos y carpetas del código |

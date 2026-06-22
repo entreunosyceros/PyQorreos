@@ -1,3 +1,10 @@
+pyqorreos (0.1.0-3) unstable; urgency=medium
+
+  * El .deb ya no incluye .venv; run_app.py lo crea en el equipo destino.
+  * Código instalado en /usr/share/pyqorreos (solo fuentes y requirements.txt).
+
+ -- PyQorreos <entreunosyceros@users.noreply.github.com>  Mon, 22 Jun 2026 12:00:00 +0200
+
 pyqorreos (0.1.0-2) unstable; urgency=medium
 
   * Instalación en /usr/lib/pyqorreos (sin /opt; binarios en lib/).

@@ -1,13 +1,12 @@
 #!/bin/sh
-# Lanzador del paquete Debian (venv en /usr/lib/pyqorreos).
+# Lanzador del paquete Debian: run_app.py crea .venv en el equipo destino.
 set -e
-ROOT=/usr/lib/pyqorreos
-PY="$ROOT/.venv/bin/python3"
-MAIN="$ROOT/main.py"
+ROOT=/usr/share/pyqorreos
+RUN_APP="$ROOT/run_app.py"
 
-if [ ! -x "$PY" ] || [ ! -f "$MAIN" ]; then
+if [ ! -f "$RUN_APP" ]; then
     echo "PyQorreos: instalación incompleta en $ROOT" >&2
     exit 1
 fi
 
-exec "$PY" "$MAIN" "$@"
+exec python3 "$RUN_APP" "$@"

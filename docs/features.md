@@ -90,6 +90,7 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 </div>
 
 - Editor enriquecido: negrita, cursiva, subrayado, listas, color, enlaces e imágenes
+- **Corrector ortográfico** mientras escribes: subrayado ondulado en palabras dudosas; **clic derecho** para ver sugerencias; idiomas **español**, **inglés** o **ambos** (selector «Ortografía» sobre el editor)
 - **Plantillas** de texto rápido (pestaña «Plantillas» en Preferencias; menú en el editor al redactar)
 - Botón **Agenda…** y autocompletado en Para/CC/CCO al redactar
 - Aviso si el cuerpo menciona adjuntos pero no hay ninguno seleccionado

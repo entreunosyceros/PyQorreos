@@ -3,3 +3,4 @@ keyring>=25.0.0
 deep-translator>=1.11.0
 pytest>=8.0.0
 python-gnupg>=0.5.2
+pyspellchecker>=0.8.0

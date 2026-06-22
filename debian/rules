@@ -1,42 +1,24 @@
 #!/usr/bin/make -f
-# Empaquetado Debian: app en /usr/lib/pyqorreos con venv PySide6.
+# Empaquetado Debian: código en /usr/share/pyqorreos; .venv lo crea run_app.py.
 
 export DH_VERBOSE = 1
-export PYQORREOS_LIB = $(CURDIR)/debian/pyqorreos/usr/lib/pyqorreos
-export PYQORREOS_VENV = $(PYQORREOS_LIB)/.venv
+export PYQORREOS_SHARE = $(CURDIR)/debian/pyqorreos/usr/share/pyqorreos
 
 %:
 	dh $@
 
 override_dh_auto_clean:
-	rm -rf $(PYQORREOS_LIB)
+	rm -rf $(PYQORREOS_SHARE)
 
 override_dh_auto_build:
 	# Sin compilación nativa del proyecto.
 
 override_dh_auto_install:
-	install -d $(PYQORREOS_LIB)
-	cp -r pyqorreos $(PYQORREOS_LIB)/
-	cp main.py requirements-runtime.txt $(PYQORREOS_LIB)/
-	python3 -m venv --copies $(PYQORREOS_VENV)
-	$(PYQORREOS_VENV)/bin/pip install --upgrade pip
-	$(PYQORREOS_VENV)/bin/pip install --no-cache-dir \
-		-r $(PYQORREOS_LIB)/requirements-runtime.txt
-	sed -i 's|^home = .*|home = /usr/bin|' $(PYQORREOS_VENV)/pyvenv.cfg
-	sed -i 's|^executable = .*|executable = /usr/bin/python3|' $(PYQORREOS_VENV)/pyvenv.cfg
-	for f in $(PYQORREOS_VENV)/bin/*; do \
-		[ -f "$$f" ] || continue; \
-		head -1 "$$f" 2>/dev/null | grep -q '^#!' || continue; \
-		sed -i '1s|^#!.*|#!/usr/lib/pyqorreos/.venv/bin/python3|' "$$f"; \
-	done
-	find $(PYQORREOS_VENV)/bin -maxdepth 1 -type f \
-		! -name 'python' ! -name 'python3' ! -name 'python3.*' -delete
-	$(PYQORREOS_VENV)/bin/pip uninstall -y pip setuptools wheel 2>/dev/null || true
-	rm -rf $(PYQORREOS_VENV)/lib/python*/site-packages/PySide6/scripts
-	find $(PYQORREOS_LIB) -name '.gitignore' -delete
-	find $(PYQORREOS_VENV) -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	rm -rf $(PYQORREOS_VENV)/lib/python*/site-packages/PySide6/Qt/plugins/sqldrivers
-	rm -rf $(PYQORREOS_VENV)/lib/python*/site-packages/PySide6/Qt/qml/QtWayland
+	install -d $(PYQORREOS_SHARE)
+	cp -r pyqorreos $(PYQORREOS_SHARE)/
+	cp run_app.py requirements.txt $(PYQORREOS_SHARE)/
+	find $(PYQORREOS_SHARE) -name '.gitignore' -delete
+	find $(PYQORREOS_SHARE) -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	install -d $(CURDIR)/debian/pyqorreos/usr/bin
 	install -m 755 debian/pyqorreos-launcher $(CURDIR)/debian/pyqorreos/usr/bin/pyqorreos
 	install -d $(CURDIR)/debian/pyqorreos/usr/share/applications
@@ -47,16 +29,3 @@ override_dh_auto_install:
 		$(CURDIR)/debian/pyqorreos/usr/share/icons/hicolor/scalable/apps/pyqorreos.svg
 	install -d $(CURDIR)/debian/pyqorreos/usr/share/doc/pyqorreos
 	install -m 644 README.md $(CURDIR)/debian/pyqorreos/usr/share/doc/pyqorreos/README.md
-
-override_dh_shlibdeps:
-	dh_shlibdeps -Xusr/lib/pyqorreos/.venv
-
-override_dh_makeshlibs:
-	# No exportamos librerías compartidas para terceros.
-	true
-
-override_dh_dwz:
-	dh_dwz -Xusr/lib/pyqorreos/.venv/
-
-override_dh_strip:
-	dh_strip -Xusr/lib/pyqorreos/.venv/

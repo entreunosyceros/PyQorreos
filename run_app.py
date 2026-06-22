@@ -21,16 +21,36 @@ from pathlib import Path
 
 # Rutas base del proyecto (siempre relativas a este archivo).
 PROJECT_DIR = Path(__file__).resolve().parent
-VENV_DIR = PROJECT_DIR / ".venv"
 REQUIREMENTS_FILE = PROJECT_DIR / "requirements.txt"
 REQUIRED_PACKAGES = ("PySide6", "keyring")
 
 
+def get_venv_dir() -> Path:
+    """
+    Directorio del entorno virtual.
+
+    - Desarrollo (árbol editable): PROJECT_DIR/.venv
+    - Paquete .deb (/usr/share/...): ~/.local/share/pyqorreos/.venv
+    - PYQORREOS_VENV: ruta explícita
+    """
+    override = os.environ.get("PYQORREOS_VENV")
+    if override:
+        return Path(override)
+    local = PROJECT_DIR / ".venv"
+    if os.access(PROJECT_DIR, os.W_OK):
+        return local
+    data_home = Path(
+        os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
+    )
+    return data_home / "pyqorreos" / ".venv"
+
+
 def get_venv_python() -> Path:
-    """Devuelve la ruta al ejecutable Python dentro de .venv."""
+    """Devuelve la ruta al ejecutable Python dentro del venv."""
+    venv_dir = get_venv_dir()
     if sys.platform == "win32":
-        return VENV_DIR / "Scripts" / "python.exe"
-    return VENV_DIR / "bin" / "python"
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
 
 
 def is_running_in_venv() -> bool:
@@ -41,16 +61,18 @@ def is_running_in_venv() -> bool:
     porque en Linux el binario del venv suele ser un enlace simbólico al Python
     del sistema y ambos resolverían a la misma ruta, provocando falsos positivos.
     """
-    if not VENV_DIR.exists():
+    if not get_venv_dir().exists():
         return False
-    return Path(sys.prefix).resolve() == VENV_DIR.resolve()
+    return Path(sys.prefix).resolve() == get_venv_dir().resolve()
 
 
 def create_venv() -> None:
-    """Crea un entorno virtual nuevo en la carpeta .venv del proyecto."""
-    print("Creando entorno virtual en .venv …")
+    """Crea un entorno virtual nuevo."""
+    venv_dir = get_venv_dir()
+    venv_dir.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Creando entorno virtual en {venv_dir} …")
     subprocess.run(
-        [sys.executable, "-m", "venv", str(VENV_DIR)],
+        [sys.executable, "-m", "venv", str(venv_dir)],
         check=True,
         cwd=PROJECT_DIR,
     )
@@ -165,7 +187,8 @@ def main() -> int:
             "\nSugerencias:\n"
             "- Comprueba tu conexión a internet.\n"
             "- Instala manualmente: .venv/bin/pip install -r requirements.txt\n"
-            "- Recrea el entorno: rm -rf .venv && python run_app.py",
+            "- Recrea el entorno: borra ~/.local/share/pyqorreos/.venv "
+            "(o .venv en el proyecto) y vuelve a ejecutar.",
             file=sys.stderr,
         )
         return 1

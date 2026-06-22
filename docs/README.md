@@ -14,7 +14,7 @@ Guías y referencia del proyecto. Empieza por [Instalación](installation.md) o 
 | Documento | Contenido |
 |-----------|-----------|
 | [Características](features.md) | Funcionalidades por área (cuentas, bandeja, lectura, redacción…) |
-| [Instalación](installation.md) | Requisitos e instalación |
+| [Instalación](installation.md) | Requisitos, código fuente y paquete `.deb` |
 | [Uso rápido](usage.md) | Primeros pasos en la interfaz |
 | [Atajos de teclado](keyboard-shortcuts.md) | Tabla de atajos |
 | [Estructura del proyecto](project-structure.md) | Árbol de carpetas y módulos |
@@ -26,6 +26,7 @@ Guías y referencia del proyecto. Empieza por [Instalación](installation.md) o 
 
 ## Enlaces rápidos
 
-- **Arrancar la app:** `python run_app.py` — ver [Instalación](installation.md)
+- **Arrancar la app:** `python run_app.py` o `pyqorreos` (si instalaste el `.deb`) — ver [Instalación](installation.md)
+- **Paquete .deb:** descarga, instalación y desinstalación — ver [Instalación → Paquete Debian](installation.md#paquete-debian-deb)
 - **Añadir cuenta:** Cuenta → Gestionar cuentas — ver [Uso rápido](usage.md)
 - **Preferencias:** Archivo → Preferencias (`Ctrl+,`) — ver [Configuración y notas](configuration.md)

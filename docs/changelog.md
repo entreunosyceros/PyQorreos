@@ -6,6 +6,13 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ---
 
+## Corrector ortográfico y empaquetado .deb (reciente)
+
+- **Corrector ortográfico** al redactar: subrayado en tiempo real y sugerencias con clic derecho; español, inglés o ambos (`pyspellchecker`).
+- **Paquete `.deb`** para Debian/Ubuntu: instalación con `apt`, lanzador `pyqorreos` y acceso directo en el menú; el venv se crea en el primer arranque en `~/.local/share/pyqorreos/.venv`.
+- Script `scripts/build-deb.sh` para generar el paquete desde el código fuente.
+- Documentación de instalación, actualización y desinstalación del `.deb` en [Instalación](installation.md#paquete-debian-deb).
+
 ## Consistencia funcional (reciente)
 
 - **OpenPGP opcional** (GnuPG): cifrar/firmar al enviar, descifrar/verificar al leer; gestión de claves en Herramientas.
