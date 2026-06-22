@@ -1,8 +1,5 @@
-# --- Entorno virtual y dependencias ---
+# --- Entorno virtual ---
 .venv/
-venv/
-env/
-ENV/
 
 # --- Python ---
 __pycache__/
@@ -68,11 +65,8 @@ unittest.xml
 *.dsc
 *.tar.xz
 *.upload
-debian/pyqorreos/
-debian/.debhelper/
-debian/debhelper-build-stamp
-debian/files
-debian/*.substvars
-debian/*.debhelper.log
+debian/*
+scripts/*
+requirements-runtime.txt
 
 
