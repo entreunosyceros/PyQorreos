@@ -21,7 +21,7 @@ pip-wheel-metadata/
 
 
 # --- Configuración y datos sensibles del usuario ---
-# (también se guardan en ~/.config/pyqorreos/, por si se copian al proyecto)
+# (también se guardan en ~/.config/pyqorreos/)
 .env
 .env.*
 *.env
@@ -55,42 +55,24 @@ coverage.xml
 *.cover
 unittest.xml
 
-# --- IDEs y editores ---
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.project
-.pydevproject
-*.sublime-project
-*.sublime-workspace
-
-# --- Cursor / agentes ---
-.cursor/
-*.log
-
-# --- Sistema operativo ---
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
 # --- Empaquetado / distribución ---
 *.dmg
 *.app
 *.exe
 *.msi
 
-# --- Jupyter (por si se usa para pruebas) ---
-.ipynb_checkpoints/
+# Debian (.deb): artefactos de dpkg-buildpackage y directorio de ensamblaje
+*.deb
+*.changes
+*.buildinfo
+*.dsc
+*.tar.xz
+*.upload
+debian/pyqorreos/
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
+debian/*.debhelper.log
 
-# --- mypy / type checkers / linters ---
-.mypy_cache/
-.dmypy.json
-dmypy.json
-.ruff_cache/
+
