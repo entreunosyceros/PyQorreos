@@ -52,21 +52,21 @@ coverage.xml
 *.cover
 unittest.xml
 
-# --- Empaquetado / distribución ---
-*.dmg
-*.app
-*.exe
-*.msi
-
-# Debian (.deb): artefactos de dpkg-buildpackage y directorio de ensamblaje
+# --- Empaquetado Debian (.deb) ---
+# Fuentes de empaquetado (no subir; conservar en local o en releases)
+/debian/
+/scripts/
+requirements-runtime.txt
+# Artefactos generados por dpkg-buildpackage
 *.deb
 *.changes
 *.buildinfo
 *.dsc
 *.tar.xz
 *.upload
-debian/*
-scripts/*
-requirements-runtime.txt
 
-
+# --- Otros instaladores ---
+*.dmg
+*.app
+*.exe
+*.msi
