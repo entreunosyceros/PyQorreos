@@ -339,6 +339,58 @@ class MailCache:
             ).fetchone()
         return int(row["n"]) if row else 0
 
+    def folder_unread_counts(
+        self, account_id: str, folders: list[str] | None = None
+    ) -> dict[str, int]:
+        """Devuelve no leídos por carpeta desde la caché local (por cuenta)."""
+        with self._connect() as conn:
+            if folders:
+                placeholders = ",".join("?" * len(folders))
+                rows = conn.execute(
+                    f"""
+                    SELECT folder, COUNT(*) AS n FROM messages
+                    WHERE account_id = ? AND seen = 0 AND folder IN ({placeholders})
+                    GROUP BY folder
+                    """,
+                    [account_id, *folders],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT folder, COUNT(*) AS n FROM messages
+                    WHERE account_id = ? AND seen = 0
+                    GROUP BY folder
+                    """,
+                    (account_id,),
+                ).fetchall()
+        return {str(row["folder"]): int(row["n"]) for row in rows}
+
+    def folder_total_counts(
+        self, account_id: str, folders: list[str] | None = None
+    ) -> dict[str, int]:
+        """Devuelve el total de mensajes por carpeta desde la caché local (por cuenta)."""
+        with self._connect() as conn:
+            if folders:
+                placeholders = ",".join("?" * len(folders))
+                rows = conn.execute(
+                    f"""
+                    SELECT folder, COUNT(*) AS n FROM messages
+                    WHERE account_id = ? AND folder IN ({placeholders})
+                    GROUP BY folder
+                    """,
+                    [account_id, *folders],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT folder, COUNT(*) AS n FROM messages
+                    WHERE account_id = ?
+                    GROUP BY folder
+                    """,
+                    (account_id,),
+                ).fetchall()
+        return {str(row["folder"]): int(row["n"]) for row in rows}
+
     def query_summaries(
         self,
         account_id: str,

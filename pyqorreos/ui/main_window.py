@@ -200,6 +200,7 @@ class MainWindow(QMainWindow):
         self._connect_worker: ConnectWorker | None = None
         self._connect_generation = 0
         self._folder_unread_worker: FolderUnreadWorker | None = None
+        self._folder_unread_generation = 0
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(250)
@@ -1297,6 +1298,8 @@ class MainWindow(QMainWindow):
 
     def _message_loaded_for_selection(self) -> bool:
         uid = self._selected_message_uid()
+        if not uid and self._current_message:
+            uid = self._current_message.uid
         return bool(
             uid
             and self._current_message
@@ -1778,7 +1781,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             apply_app_theme(app, self._prefs.theme)
-        apply_message_viewer_theme(self.message_viewer, self._prefs.theme)
+        self.message_viewer.apply_theme(self._prefs.theme)
         mark_object(self.folder_tree, "pyqFolderTree")
         mark_object(self.message_table, "pyqMessageTable")
         mark_role(self.quota_label, "hint")
@@ -2028,6 +2031,8 @@ class MainWindow(QMainWindow):
 
         self._cancel_sync()
         self._stop_connect_worker()
+        self._stop_folder_unread_worker()
+        self._background_sync.stop(wait_ms=0)
         if self.mail_service:
             self.mail_service.disconnect()
             self.mail_service = None
@@ -2073,6 +2078,7 @@ class MainWindow(QMainWindow):
             self.mail_cache.save_account_folders(
                 self.current_account.id, self._folder_names
             )
+            self._prime_folder_unread_from_cache(self.current_account.id)
             self._refresh_folder_tree(select_folder=self._current_folder or "INBOX")
 
             self.mail_service = MailService(
@@ -2094,7 +2100,7 @@ class MainWindow(QMainWindow):
             self._background_sync.set_accounts(
                 self.accounts, self.current_account.id if self.current_account else None
             )
-            self._background_sync.start()
+            self._background_sync.start(wait_ms=500)
             self._update_connection_status("online")
             self.status_bar.showMessage(f"Conectado a {self.current_account.email}")
             self._apply_pending_nav()
@@ -2135,6 +2141,7 @@ class MainWindow(QMainWindow):
     def _preload_cached_folders(self, account_id: str) -> None:
         """Muestra el árbol de carpetas desde caché antes de conectar por IMAP."""
         self._folder_names = self.mail_cache.load_account_folders(account_id)
+        self._prime_folder_unread_from_cache(account_id)
         self._refresh_folder_tree(select_folder=self._current_folder or "INBOX")
 
     def _preload_cached_folder(self, account_id: str, folder: str) -> None:
@@ -2191,11 +2198,35 @@ class MainWindow(QMainWindow):
         )
         self.folder_tree.blockSignals(False)
 
+    def _prime_folder_unread_from_cache(self, account_id: str) -> None:
+        """Carga el total de mensajes por carpeta de la cuenta activa desde la caché local."""
+        folders = self._folder_names or None
+        self._folder_unread = self.mail_cache.folder_total_counts(account_id, folders)
+
+    def _stop_folder_unread_worker(self) -> None:
+        """Invalida consultas de no leídos en curso (p. ej. al cambiar de cuenta)."""
+        self._folder_unread_timer.stop()
+        self._folder_unread_generation += 1
+        worker = self._folder_unread_worker
+        self._folder_unread_worker = None
+        if worker is None or not self._thread_object_alive(worker):
+            return
+        self._disconnect_worker_signals(worker)
+        self._stop_thread(worker, wait_ms=0)
+
     def _refresh_folder_unread_counts(self) -> None:
         """Programa la actualización de no leídos (agrupa peticiones seguidas)."""
         if not self.current_account or not self._folder_names:
             return
         self._folder_unread_timer.start()
+
+    def _apply_local_unread_delta(self, folder: str, delta: int) -> None:
+        """Ajusta de inmediato el total de mensajes de una carpeta en el árbol."""
+        if not folder or not delta:
+            return
+        current = self._folder_unread.get(folder, 0)
+        self._folder_unread[folder] = max(0, current + delta)
+        self._refresh_folder_tree(select_folder=self._current_folder)
 
     def _run_folder_unread_refresh(self) -> None:
         if not self.current_account or not self._folder_names:
@@ -2204,17 +2235,31 @@ class MainWindow(QMainWindow):
         if not auth_secret:
             return
         if self._folder_unread_worker and self._folder_unread_worker.isRunning():
+            # Hay una consulta en curso: reprograma para no perder esta petición.
+            self._folder_unread_timer.start()
             return
+        generation = self._folder_unread_generation
+        account_id = self.current_account.id
         worker = FolderUnreadWorker(
             self.current_account, auth_secret, self._folder_names
         )
-        worker.signals.finished.connect(self._on_folder_unread_counts)
+        worker.signals.finished.connect(
+            lambda counts, g=generation, aid=account_id: self._on_folder_unread_counts(
+                counts, g, aid
+            )
+        )
         worker.signals.error.connect(lambda _m: None)
         worker.start()
         self._folder_unread_worker = worker
         self._track_worker(worker)
 
-    def _on_folder_unread_counts(self, counts: dict) -> None:
+    def _on_folder_unread_counts(
+        self, counts: dict, generation: int, account_id: str
+    ) -> None:
+        if generation != self._folder_unread_generation:
+            return
+        if not self.current_account or str(self.current_account.id) != str(account_id):
+            return
         self._folder_unread = counts
         self._refresh_folder_tree(select_folder=self._current_folder)
 
@@ -2280,6 +2325,9 @@ class MainWindow(QMainWindow):
         if folder == self._current_folder:
             self._all_messages = []
             self._render_message_table()
+        if folder in self._folder_unread:
+            self._folder_unread[folder] = 0
+            self._refresh_folder_tree(select_folder=self._current_folder)
         self._refresh_folder_unread_counts()
         self.status_bar.showMessage(f"Carpeta vaciada ({count} mensajes)")
 
@@ -2845,6 +2893,9 @@ class MainWindow(QMainWindow):
         show_folder = self._show_folder_column()
         colors = self._category_colors()
         fg = QBrush(self._text_color())
+        preserve_uid = self._selected_message_uid()
+        if not preserve_uid and self._current_message:
+            preserve_uid = self._current_message.uid
         self.message_table.blockSignals(True)
         self.message_table.setRowCount(0)
         self._message_uids: list[str] = []
@@ -2908,8 +2959,11 @@ class MainWindow(QMainWindow):
                 col += 1
 
         self.message_table.clearSelection()
+        if preserve_uid and preserve_uid in self._message_uids:
+            self.message_table.selectRow(self._message_uids.index(preserve_uid))
         self.message_table.blockSignals(False)
         self._update_pagination_controls(len(messages), len(filtered), pages)
+        self._update_message_actions()
 
         counts = {
             MailCategory.NORMAL: sum(1 for m in self._all_messages if m.category == MailCategory.NORMAL),
@@ -3725,7 +3779,11 @@ class MainWindow(QMainWindow):
     def _on_messages_moved(self, payload) -> None:
         uids, dest = payload
         moved = set(uids)
+        moved_count = sum(1 for m in self._all_messages if m.uid in moved)
         self._all_messages = [m for m in self._all_messages if m.uid not in moved]
+        if moved_count:
+            self._apply_local_unread_delta(self._current_folder, -moved_count)
+            self._apply_local_unread_delta(dest, moved_count)
         self._current_message = None
         self._set_message_actions_enabled(False)
         self.subject_label.setText("Selecciona un mensaje")
@@ -3733,6 +3791,7 @@ class MainWindow(QMainWindow):
         self.message_viewer.clear()
         self.attachment_panel.clear()
         self._render_message_table()
+        self._refresh_folder_unread_counts()
         self.status_bar.showMessage(f"{len(uids)} mensaje(s) movidos a {dest}")
 
     def _on_move_error(self, message: str) -> None:
@@ -4207,7 +4266,10 @@ class MainWindow(QMainWindow):
     def _on_messages_deleted(self, uids: list[str]) -> None:
         self._finish_delete_ui()
         removed = set(uids)
+        removed_count = sum(1 for m in self._all_messages if m.uid in removed)
         self._all_messages = [m for m in self._all_messages if m.uid not in removed]
+        if removed_count:
+            self._apply_local_unread_delta(self._current_folder, -removed_count)
         if self._current_message and self._current_message.uid in removed:
             self._current_message = None
             self._set_message_actions_enabled(False)

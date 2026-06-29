@@ -162,11 +162,14 @@ def normalize_translation_source(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", fallback).strip()
 
 # Convierte la traducción en HTML legible para el visor WebEngine.
-def translated_text_to_html(text: str, language_label: str = "") -> str:
+def translated_text_to_html(
+    text: str, language_label: str = "", *, theme: str | None = None
+) -> str:
     """Convierte la traducción en HTML legible para el visor WebEngine."""
     from html import escape
 
     from pyqorreos.core.email_html import apply_reading_mode_styles
+    from pyqorreos.ui.theme import viewer_translation_banner_css
 
     text = normalize_translation_source(text)
     if not text:
@@ -192,12 +195,11 @@ def translated_text_to_html(text: str, language_label: str = "") -> str:
         f"Traducción {label} — el diseño original no se conserva."
         f"</p>"
     )
+    banner_css = viewer_translation_banner_css(theme)
     # Construye el HTML de la traducción.
     html = (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        "<style>.pyq-translation-banner {"
-        "color:#555;font-size:10pt;background:#eef4fb;border-left:4px solid #2d7dd2;"
-        "padding:8px 12px;margin:0 0 1rem 0;}</style>"
+        f"<style>{banner_css}</style>"
         f"</head><body>{banner}{body}</body></html>"
     )
-    return apply_reading_mode_styles(html)
+    return apply_reading_mode_styles(html, theme)

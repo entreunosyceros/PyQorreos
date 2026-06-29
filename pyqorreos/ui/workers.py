@@ -630,6 +630,8 @@ class EmptyFolderWorker(QThread):
 
 
 class FolderUnreadWorker(QThread):
+    """Consulta el total de mensajes por carpeta (IMAP STATUS MESSAGES)."""
+
     def __init__(
         self,
         account: MailAccount,
@@ -646,7 +648,7 @@ class FolderUnreadWorker(QThread):
         service = MailService(self.account, self.password)
         try:
             service.connect()
-            counts = service.get_folder_unread_counts(self.folders)
+            counts = service.get_folder_total_counts(self.folders)
             self.signals.finished.emit(counts)
         except Exception as exc:
             self.signals.error.emit(friendly_mail_error(exc))

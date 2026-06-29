@@ -63,6 +63,7 @@ class MessageViewer(QWidget):
         self._showing_translation = False
         self._compact_toolbar = False
         self._read_receipt_to = ""
+        self._theme = "light"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -179,10 +180,18 @@ class MessageViewer(QWidget):
 
         from pyqorreos.core.user_preferences import load_preferences
 
-        apply_message_viewer_theme(self, load_preferences().theme)
+        self._theme = load_preferences().theme
+        apply_message_viewer_theme(self, self._theme)
 
     def apply_theme(self, theme: str) -> None:
+        self._theme = theme
         apply_message_viewer_theme(self, theme)
+        if self._showing_translation:
+            return
+        if self._view_mode == "plain":
+            return
+        if self._stored_html.strip():
+            self._render_current()
 
     def set_compact_toolbar(self, compact: bool) -> None:
         if compact == self._compact_toolbar:
@@ -324,7 +333,7 @@ class MessageViewer(QWidget):
         self._btn_view_mode.setVisible(False)
         self._btn_load_images.setVisible(False)
 
-        html = translated_text_to_html(text, language_label)
+        html = translated_text_to_html(text, language_label, theme=self._theme)
         base = QUrl(self._stored_base_url) if self._stored_base_url else QUrl("about:blank")
         if _HAS_WEBENGINE:
             page = self._web.page()
@@ -384,16 +393,19 @@ class MessageViewer(QWidget):
         return self._stored_html
 
     def _html_for_viewer(self) -> str:
+        from pyqorreos.core.email_html import (
+            apply_viewer_theme_styles,
+            block_remote_images_in_html,
+        )
+
         html = self._stored_html
         if self._remote_blocked:
-            from pyqorreos.core.email_html import block_remote_images_in_html
-
             html = block_remote_images_in_html(html)
-        if self._view_mode == "reading":
-            from pyqorreos.core.email_html import apply_reading_mode_styles
-
-            html = apply_reading_mode_styles(html)
-        return html
+        return apply_viewer_theme_styles(
+            html,
+            self._theme,
+            reading_mode=self._view_mode == "reading",
+        )
 
     def _reset_translation_state(self) -> None:
         self._showing_translation = False

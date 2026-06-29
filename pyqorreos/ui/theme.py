@@ -485,6 +485,65 @@ def compose_document_stylesheet(theme: str | None = None) -> str:
     }}
     """
 
+# CSS base para correos mostrados en el visor (HTML / WebEngine).
+def viewer_email_base_css(theme: str | None = None) -> str:
+    t = theme_tokens(theme)
+    return f"""
+body, div, p, td, th, li, span {{
+    color: {t.text} !important;
+    font-family: sans-serif;
+}}
+body {{
+    background: {t.bg_panel} !important;
+    margin: 8px;
+    line-height: 1.45;
+}}
+img {{
+    max-width: 100% !important;
+    height: auto !important;
+}}
+table {{ max-width: 100% !important; }}
+a {{ color: {t.link} !important; }}
+"""
+
+# CSS adicional para el modo lectura del visor.
+def viewer_email_reading_css(theme: str | None = None) -> str:
+    t = theme_tokens(theme)
+    return f"""
+body {{
+    max-width: 42rem !important;
+    margin: 0 auto !important;
+    padding: 1rem 1.25rem !important;
+    font: 1.05rem/1.65 Georgia, "Times New Roman", serif !important;
+    color: {t.text} !important;
+    background: {t.bg_panel} !important;
+}}
+img, video, iframe {{ display: none !important; }}
+table {{ width: 100% !important; border-collapse: collapse !important; }}
+td, th {{ padding: 0.25rem 0 !important; }}
+a {{ color: {t.link} !important; text-decoration: underline !important; }}
+blockquote {{
+    border-left: 3px solid {t.border} !important;
+    margin-left: 0 !important;
+    padding-left: 1rem !important;
+    color: {t.text_muted} !important;
+}}
+"""
+
+# CSS del aviso de traducción en el visor.
+def viewer_translation_banner_css(theme: str | None = None) -> str:
+    t = theme_tokens(theme)
+    return f"""
+.pyq-translation-banner {{
+    color: {t.text_muted};
+    font-size: 10pt;
+    background: {t.bg_muted};
+    border-left: 4px solid {t.accent};
+    padding: 8px 12px;
+    margin: 0 0 1rem 0;
+}}
+"""
+
 # Genera la hoja de estilos para el visor de mensajes.
 def message_surface_stylesheet(theme: str | None = None) -> str:
     t = theme_tokens(theme)
@@ -560,6 +619,12 @@ def apply_message_viewer_theme(viewer, theme: str | None = None) -> None:
 def apply_compose_editor_theme(editor, theme: str | None = None) -> None:
     """Actualiza estilos del editor de redacción."""
     theme = normalize_theme(theme or _CURRENT_THEME)
+    t = theme_tokens(theme)
     mark_object(editor.toolbar, "pyqComposeToolbar")
     mark_object(editor.editor, "pyqComposeEditor")
-    editor.editor.document().setDefaultStyleSheet(compose_document_stylesheet(theme))
+    text_edit = editor.editor
+    palette = text_edit.palette()
+    palette.setColor(QPalette.ColorRole.Text, QColor(t.text))
+    palette.setColor(QPalette.ColorRole.Base, QColor(t.bg_panel))
+    text_edit.setPalette(palette)
+    text_edit.document().setDefaultStyleSheet(compose_document_stylesheet(theme))

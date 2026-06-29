@@ -127,6 +127,7 @@ class BackgroundSyncManager(QObject):
         self.cache = cache
         self.signals = BackgroundSyncSignals()
         self._idle_thread: IdleMonitorThread | None = None
+        self._idle_account_id: str | None = None
         self._sync_threads: list[AccountSyncThread] = []
         self._thread_refs: list[QThread] = []
         self._active_sync_keys: set[tuple[str, str]] = set()
@@ -156,21 +157,33 @@ class BackgroundSyncManager(QObject):
         if not self._poll_timer.isActive():
             self._poll_timer.start(interval_ms)
 
-    def _running_idle(self) -> IdleMonitorThread | None:
-        if self._idle_thread is not None:
-            try:
-                if self._idle_thread.isRunning():
-                    return self._idle_thread
-            except RuntimeError:
-                pass
+    def _prune_dead_thread_refs(self) -> None:
+        alive: list[QThread] = []
         for thread in self._thread_refs:
-            if isinstance(thread, IdleMonitorThread):
-                try:
-                    if thread.isRunning():
-                        return thread
-                except RuntimeError:
-                    continue
-        return None
+            try:
+                thread.isRunning()
+                alive.append(thread)
+            except RuntimeError:
+                if self._idle_thread is thread:
+                    self._idle_thread = None
+                    self._idle_account_id = None
+        self._thread_refs = alive
+
+    def _stop_idle_thread(self, *, wait_ms: int = 0) -> None:
+        idle = self._idle_thread
+        self._idle_thread = None
+        self._idle_account_id = None
+        if idle is None:
+            return
+        try:
+            idle.activity_detected.disconnect(self._on_idle_cycle)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            idle.stop()
+        except RuntimeError:
+            pass
+        self._release_thread(idle, wait_ms=wait_ms)
 
     def update_preferences(self, prefs: UserPreferences) -> None:
         self._prefs = prefs
@@ -191,6 +204,9 @@ class BackgroundSyncManager(QObject):
             self._thread_refs.remove(thread)
         except ValueError:
             pass
+        if self._idle_thread is thread:
+            self._idle_thread = None
+            self._idle_account_id = None
 
     def start(self, *, wait_ms: int = 0) -> None:
         self.stop(wait_ms=wait_ms)
@@ -203,19 +219,13 @@ class BackgroundSyncManager(QObject):
         if active and self._prefs.use_imap_idle:
             password = self.settings.get_auth_secret(active)
             if password:
-                idle = self._running_idle()
-                if idle is None:
-                    idle = IdleMonitorThread(active, password, timeout_sec=120)
-                    self._own_thread(idle)
-                    idle.activity_detected.connect(self._on_idle_cycle)
-                    idle.finished.connect(idle.deleteLater)
-                    idle.start()
-                else:
-                    try:
-                        idle.activity_detected.disconnect(self._on_idle_cycle)
-                    except (RuntimeError, TypeError):
-                        pass
-                    idle.activity_detected.connect(self._on_idle_cycle)
+                self._prune_dead_thread_refs()
+                idle = IdleMonitorThread(active, password, timeout_sec=120)
+                self._own_thread(idle)
+                self._idle_account_id = active.id
+                idle.activity_detected.connect(self._on_idle_cycle)
+                idle.finished.connect(idle.deleteLater)
+                idle.start()
                 self._idle_thread = idle
         self.sync_all_accounts_now()
         if self._modal_pause_depth <= 0:
@@ -234,15 +244,7 @@ class BackgroundSyncManager(QObject):
     def stop(self, *, wait_ms: int = 5000) -> None:
         """Detiene IDLE y polling. Con wait_ms=0 solo pausa (sin bloquear la UI)."""
         self._poll_timer.stop()
-        if self._idle_thread:
-            try:
-                self._idle_thread.activity_detected.disconnect(self._on_idle_cycle)
-            except (RuntimeError, TypeError):
-                pass
-            self._idle_thread.stop()
-            idle = self._idle_thread
-            self._idle_thread = None
-            self._release_thread(idle, wait_ms=wait_ms)
+        self._stop_idle_thread(wait_ms=wait_ms)
 
         if wait_ms <= 0:
             # Pausa rápida (p. ej. diálogos modales): no tocar sync en curso.
@@ -262,12 +264,24 @@ class BackgroundSyncManager(QObject):
     def _release_thread(thread: QThread, *, wait_ms: int) -> None:
         if thread is None:
             return
-        if wait_ms > 0 and thread.isRunning():
+        try:
+            running = thread.isRunning()
+        except RuntimeError:
+            return
+        if wait_ms > 0 and running:
             thread.wait(wait_ms)
-            if thread.isRunning():
+            try:
+                running = thread.isRunning()
+            except RuntimeError:
+                return
+            if running:
                 thread.terminate()
                 thread.wait(300)
-        if thread.isRunning():
+        try:
+            running = thread.isRunning()
+        except RuntimeError:
+            return
+        if running:
             thread.finished.connect(thread.deleteLater)
         else:
             thread.deleteLater()

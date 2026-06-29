@@ -1303,6 +1303,27 @@ class MailService:
                     counts[folder] = 0
         return counts
 
+    def get_folder_total_counts(self, folders: list[str]) -> dict[str, int]:
+        """Devuelve el número total de mensajes por carpeta (IMAP STATUS MESSAGES)."""
+        counts: dict[str, int] = {}
+        with self._imap_lock:
+            self._ensure_connected_unlocked()
+            imap = self._require_imap()
+            for folder in folders:
+                try:
+                    status, data = imap.status(
+                        self._quoted_folder(folder), "(MESSAGES)"
+                    )
+                    if status == "OK" and data:
+                        line = data[0].decode("utf-8", errors="replace")
+                        match = re.search(r"MESSAGES\s+(\d+)", line)
+                        counts[folder] = int(match.group(1)) if match else 0
+                    else:
+                        counts[folder] = 0
+                except imaplib.IMAP4.error:
+                    counts[folder] = 0
+        return counts
+
     def save_draft(self, folder: str, raw_message: bytes) -> None:
         """Guarda un borrador en la carpeta IMAP indicada (APPEND)."""
         with self._imap_lock:

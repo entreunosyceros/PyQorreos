@@ -91,6 +91,7 @@ class RichComposeEditor(QWidget):
         if theme:
             self._theme = theme
         apply_compose_editor_theme(self, self._resolve_theme())
+        self._reset_cursor_style()
 
     def _add_format_actions(self) -> None:
         specs = (
@@ -146,8 +147,13 @@ class RichComposeEditor(QWidget):
 
         color_action = QAction("A", self)
         color_action.setToolTip("Color del texto")
-        color_action.triggered.connect(self._pick_color)
+        color_action.triggered.connect(self._pick_text_color)
         self.toolbar.addAction(color_action)
+
+        bg_color_action = QAction("▮", self)
+        bg_color_action.setToolTip("Color de fondo del texto")
+        bg_color_action.triggered.connect(self._pick_background_color)
+        self.toolbar.addAction(bg_color_action)
 
         self.toolbar.addSeparator()
 
@@ -267,16 +273,30 @@ class RichComposeEditor(QWidget):
         image_fmt.setWidth(480)
         cursor.insertImage(image_fmt)
 
-    def _pick_color(self) -> None:
-        color = QColorDialog.getColor(
-            self._cursor().charFormat().foreground().color(),
-            self,
-            "Color del texto",
-        )
+    def _pick_text_color(self) -> None:
+        from pyqorreos.ui.theme import theme_tokens
+
+        t = theme_tokens(self._resolve_theme())
+        current = self._cursor().charFormat().foreground().color()
+        initial = current if current.isValid() else QColor(t.text)
+        color = QColorDialog.getColor(initial, self, "Color del texto")
         if not color.isValid():
             return
         fmt = QTextCharFormat()
         fmt.setForeground(color)
+        self._merge_format(fmt)
+
+    def _pick_background_color(self) -> None:
+        from pyqorreos.ui.theme import theme_tokens
+
+        t = theme_tokens(self._resolve_theme())
+        current = self._cursor().charFormat().background().color()
+        initial = current if current.isValid() else QColor(t.bg_panel)
+        color = QColorDialog.getColor(initial, self, "Color de fondo del texto")
+        if not color.isValid():
+            return
+        fmt = QTextCharFormat()
+        fmt.setBackground(color)
         self._merge_format(fmt)
 
     def _clear_format(self) -> None:
@@ -291,6 +311,7 @@ class RichComposeEditor(QWidget):
         fmt.setFontItalic(False)
         fmt.setFontUnderline(False)
         fmt.setForeground(QColor(t.text))
+        fmt.setBackground(QColor(t.bg_panel))
         cursor.mergeCharFormat(fmt)
 
     def _reset_cursor_style(self) -> None:

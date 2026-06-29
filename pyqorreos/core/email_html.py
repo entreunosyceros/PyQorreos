@@ -44,24 +44,52 @@ _ATTR_URL = re.compile(
     rf"""(?<![\w-])({'|'.join(_IMG_URL_ATTRS)})\s*=\s*["']([^"']+)["']""",
     re.IGNORECASE,
 )
-# Estilos base para el HTML del mensaje.
-_BASE_STYLES = """
-body, div, p, td, th, li, span {
-    color: #1a1a1a !important;
-    font-family: sans-serif;
-}
-body {
-    background: #ffffff !important;
-    margin: 8px;
-    line-height: 1.45;
-}
-img {
-    max-width: 100% !important;
-    height: auto !important;
-}
-table { max-width: 100% !important; }
-a { color: #2d7dd2 !important; }
-"""
+# Estilos base para el HTML del mensaje (según tema de la aplicación).
+def _base_styles(theme: str | None = None) -> str:
+    from pyqorreos.ui.theme import viewer_email_base_css
+
+    return viewer_email_base_css(theme)
+
+# Estilos mínimos de lectura sobre el HTML del mensaje.
+def _reading_mode_styles(theme: str | None = None) -> str:
+    from pyqorreos.ui.theme import viewer_email_reading_css
+
+    return viewer_email_reading_css(theme)
+
+# Inserta o sustituye el bloque de tema del visor en un documento HTML.
+def apply_viewer_theme_styles(
+    html: str,
+    theme: str | None = None,
+    *,
+    reading_mode: bool = False,
+) -> str:
+    """Aplica colores del tema actual para que el correo sea legible."""
+    if not html.strip():
+        return html
+    from pyqorreos.ui.theme import normalize_theme
+
+    theme = normalize_theme(theme)
+    css = _base_styles(theme)
+    if reading_mode:
+        css += _reading_mode_styles(theme)
+    style_block = (
+        f"<style type='text/css' id='pyqorreos-viewer-theme'>{css}</style>"
+    )
+    if _PYQ_VIEWER_THEME_STYLE.search(html):
+        return _PYQ_VIEWER_THEME_STYLE.sub(style_block, html, count=1)
+    if _HAS_HEAD_CLOSE.search(html):
+        return _HAS_HEAD_CLOSE.sub(f"{style_block}</head>", html, count=1)
+    if _HAS_HTML_TAG.search(html):
+        return _HAS_HTML_TAG.sub(
+            rf"<html\1><head><meta charset='utf-8'>{style_block}</head>",
+            html,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"{style_block}</head><body>{html}</body></html>"
+    )
 
 _CID_IN_ATTR = re.compile(
     r"""(src|background|href)\s*=\s*["']?cid:([^"'\s>]+)["']?""",
@@ -90,6 +118,10 @@ _BLOCKED_CSS_URL = re.compile(
 _HAS_HTML_TAG = re.compile(r"<html[\s>]", re.IGNORECASE)
 _HAS_HEAD_CLOSE = re.compile(r"</head>", re.IGNORECASE)
 _HAS_BODY_TAG = re.compile(r"<body[\s>]", re.IGNORECASE)
+_PYQ_VIEWER_THEME_STYLE = re.compile(
+    r"""<style[^>]*\bid=["']pyqorreos-viewer-theme["'][^>]*>.*?</style>""",
+    re.IGNORECASE | re.DOTALL,
+)
 
 # Normaliza la URL de una imagen remota.
 def _normalize_remote_url(url: str) -> str:
@@ -713,25 +745,9 @@ def count_blocked_image_placeholders(html: str) -> int:
     return html.count(BLOCKED_IMAGE_PLACEHOLDER_MARKER)
 
 # Inserta estilos de legibilidad sin romper documentos HTML completos.
-def _inject_base_styles(html: str) -> str:
+def _inject_base_styles(html: str, theme: str | None = None) -> str:
     """Inserta estilos de legibilidad sin romper documentos HTML completos."""
-    style_block = f"<style type='text/css'>{_BASE_STYLES}</style>"
-    if _HAS_HTML_TAG.search(html):
-        if _HAS_HEAD_CLOSE.search(html):
-            return _HAS_HEAD_CLOSE.sub(style_block + "</head>", html, count=1)
-        if _HAS_BODY_TAG.search(html):
-            return _HAS_BODY_TAG.sub(style_block + "<body", html, count=1)
-        return re.sub(
-            r"<html([^>]*)>",
-            rf"<html\1><head>{style_block}</head>",
-            html,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    return (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        f"{style_block}</head><body>{html}</body></html>"
-    )
+    return apply_viewer_theme_styles(html, theme, reading_mode=False)
 
 # Obtiene la URL base de un remitente.
 def _base_url_from_sender(sender: str) -> str:
@@ -746,6 +762,7 @@ def prepare_html_for_display(
     html: str,
     sender: str = "",
     load_remote_images: bool = True,
+    theme: str | None = None,
 ) -> str:
     if not html.strip():
         return ""
@@ -756,7 +773,7 @@ def prepare_html_for_display(
         html = _embed_remote_images(html, referer=referer)
     else:
         html = block_remote_images_in_html(html)
-    html = _inject_base_styles(html)
+    html = _inject_base_styles(html, theme)
     from pyqorreos.ui.webengine_setup import (
         inject_link_safety_overlay,
         sanitize_email_html_for_viewer,
@@ -769,47 +786,9 @@ def prepare_html_for_display(
 def base_url_for_message(sender: str) -> str:
     return _base_url_from_sender(sender)
 
-# Estilos mínimos de lectura sobre el HTML del mensaje.
-_READING_MODE_STYLES = """
-body {
-    max-width: 42rem !important;
-    margin: 0 auto !important;
-    padding: 1rem 1.25rem !important;
-    font: 1.05rem/1.65 Georgia, "Times New Roman", serif !important;
-    color: #1a1a1a !important;
-    background: #fafafa !important;
-}
-img, video, iframe { display: none !important; }
-table { width: 100% !important; border-collapse: collapse !important; }
-td, th { padding: 0.25rem 0 !important; }
-a { color: #1a5fb4 !important; text-decoration: underline !important; }
-blockquote {
-    border-left: 3px solid #ccc !important;
-    margin-left: 0 !important;
-    padding-left: 1rem !important;
-    color: #444 !important;
-}
-"""
-
-
-def apply_reading_mode_styles(html: str) -> str:
+def apply_reading_mode_styles(html: str, theme: str | None = None) -> str:
     """Aplica estilos mínimos de lectura sobre el HTML del mensaje."""
-    if not html.strip():
-        return html
-    style_block = f"<style>{_READING_MODE_STYLES}</style>"
-    if _HAS_HEAD_CLOSE.search(html):
-        return _HAS_HEAD_CLOSE.sub(f"{style_block}</head>", html, count=1)
-    if _HAS_HTML_TAG.search(html):
-        return _HAS_HTML_TAG.sub(
-            rf"<html\1><head><meta charset='utf-8'>{style_block}</head>",
-            html,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    return (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        f"{style_block}</head><body>{html}</body></html>"
-    )
+    return apply_viewer_theme_styles(html, theme, reading_mode=True)
 
 
 def _strip_email_html_boilerplate(html: str) -> str:
