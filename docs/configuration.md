@@ -94,6 +94,7 @@ El `refresh_token` se guarda en el llavero de forma permanente; el `access_token
 ### Carpetas IMAP
 
 - Si en Gmail aparece una carpeta **Mailspring** (u otra de un cliente antiguo), puedes eliminarla con clic derecho en el árbol → **Eliminar carpeta…** (las carpetas del sistema como INBOX o `[Gmail]/…` están protegidas).
+- **Renombrar una carpeta** de usuario: clic derecho en el árbol → **Renombrar carpeta…**, **doble clic** sobre ella o tecla **`F2`**. Se renombra en el servidor y se actualiza la caché local (incluidas las subcarpetas). Las carpetas del sistema no se pueden renombrar.
 
 ### Bandeja del sistema
 

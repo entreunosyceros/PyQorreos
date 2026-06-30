@@ -6,6 +6,13 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ---
 
+## Gestión de carpetas y legibilidad (reciente)
+
+- **Renombrar carpetas** de usuario desde el árbol: menú contextual «Renombrar carpeta…», **doble clic** o tecla **`F2`**; las carpetas del sistema están protegidas y se renombran también las subcarpetas en cascada (servidor y caché local).
+- **Color de texto y de fondo** en el editor de redacción.
+- **Contraste según el tema**: fuente clara en tema oscuro y oscura en tema claro, tanto al leer correos como al redactarlos.
+- El número junto a cada carpeta del árbol muestra el **total de mensajes**, coherente con el contador inferior de la lista; correcto **por cuenta** al cambiar entre cuentas.
+
 ## Corrector ortográfico y empaquetado .deb (reciente)
 
 - **Corrector ortográfico** al redactar: subrayado en tiempo real y sugerencias con clic derecho; español, inglés o ambos (`pyspellchecker`).

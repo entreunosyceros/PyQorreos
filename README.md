@@ -32,6 +32,7 @@ Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**.
 - **Estado de conexión** permanente y barra de progreso solo al descargar mensajes nuevos
 - **Visor HTML** (WebEngine), imágenes remotas bajo demanda, traducción y anti-phishing
 - **Borradores editables**, búsqueda multi-carpeta, notificaciones con clic para abrir
+- **Gestión de carpetas**: crear, eliminar y **renombrar** (doble clic o `F2`); las del sistema protegidas
 - **Agenda de contactos** local (direcciones habituales; sin impacto en sync)
 - **Corrector ortográfico** al redactar (español / inglés)
 - **OAuth2** (Gmail / Microsoft), presets por proveedor y tema claro/oscuro

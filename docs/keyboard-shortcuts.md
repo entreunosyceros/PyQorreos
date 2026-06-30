@@ -16,6 +16,7 @@
 | `Ctrl+Shift+M` | Mover mensaje(s) a otra carpeta |
 | `Ctrl+Shift+A` | Agenda de contactos |
 | `F5` | Actualizar carpeta |
+| `F2` | Renombrar la carpeta seleccionada (doble clic también) |
 | `Ctrl+,` | Preferencias |
 | `Ctrl+Q` | Salir |
 

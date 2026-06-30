@@ -35,6 +35,7 @@ La ventana permanece usable mientras conecta; no hace falta pulsar «Actualizar�
 11. En **Borradores**, **doble clic** abre el borrador en el editor para seguir editándolo. Tras **enviar**, puedes elegir abrir la carpeta **Enviados**.
 12. **Agenda de contactos** (`Ctrl+Shift+A`): guarda direcciones que uses a menudo. Al redactar, usa **Agenda…** o el autocompletado en Para/CC/CCO. Desde el listado: clic derecho → **Guardar remitente en la agenda…**
 13. Clic derecho en el listado, en una carpeta o en la bandeja del sistema para más acciones. Un **clic en la notificación** de correo nuevo abre la carpeta o el mensaje.
+14. **Renombrar una carpeta** de usuario: clic derecho → **Renombrar carpeta…**, **doble clic** sobre ella o tecla **`F2`**. Las carpetas del sistema (INBOX, Enviados, Papelera…) están protegidas.
 14. Ajusta el comportamiento en **Archivo → Preferencias…** (`Ctrl+,`): sync, imágenes, idioma de traducción, plantillas, **clasificación** (reglas aprendidas), OAuth…
 
 ## Selección múltiple

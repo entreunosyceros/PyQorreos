@@ -40,6 +40,7 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Indicador permanente de **estado de conexión** en la barra de estado (sin conexión, conectado, sincronizando…)
 - Árbol de carpetas con iconos SVG y contador de no leídos
 - Crear carpetas y subcarpetas en el servidor IMAP; eliminar carpetas de usuario (p. ej. restos de otros clientes como `Mailspring`)
+- **Renombrar carpetas** de usuario (menú contextual, doble clic o `F2`); las carpetas del sistema (INBOX, Enviados, Papelera…) están protegidas
 - Sincronización incremental (solo descarga mensajes nuevos)
 - Sincronización en segundo plano (IMAP IDLE + polling) configurable en preferencias (por defecto cada 15 minutos)
 - Caché local SQLite para abrir la bandeja al instante
