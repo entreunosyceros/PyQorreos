@@ -51,7 +51,10 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Reglas de remitente al marcar spam o importante (aprendizaje persistente)
 - Pestaña **Clasificación** en Preferencias para revisar y quitar reglas aprendidas
 - Búsqueda por asunto o remitente, filtro «Solo no leídos» y ordenación
+- **Búsqueda en el cuerpo** con índice **FTS5** (casilla «En el cuerpo»): busca dentro del texto de los mensajes ya descargados/abiertos, con coincidencia por prefijo y sin acentos
+- Filtro **«Solo destacados»** (★) para ver de un vistazo los correos favoritos
 - Opción **buscar en todas las carpetas** de la cuenta (cabeceras en caché); muestra la carpeta en la lista
+- **Marcar toda la carpeta como leída** desde el menú contextual de la carpeta
 - Vista de conversaciones (agrupación por hilos, opcional en preferencias); el asunto indica cuántos mensajes hay en el hilo
 - Notificaciones de correo nuevo en la bandeja del sistema (remitente y asunto); **clic en la notificación** abre la carpeta o el mensaje
 
@@ -75,14 +78,16 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 
 - Responder, responder a todos, reenviar y eliminar
 - **Eliminación en lote** optimizada (IMAP y caché SQLite por lotes) con aviso en barra de estado y barra de progreso al borrar varios mensajes
-- Selección múltiple: marcar, eliminar o mover varios correos a la vez
+- Selección múltiple: marcar, eliminar, destacar, archivar o mover varios correos a la vez
+- **Destacar** mensajes (★) con `Ctrl+D` o el menú contextual; el listado muestra una estrella y puedes filtrarlos con «Solo destacados»
+- **Archivar** mensajes con `Ctrl+E` o el menú contextual (mueve a la carpeta de archivo; si no existe, ofrece crear «Archivo»)
 - Mover mensajes entre carpetas (menú contextual o botón «Mover a…»)
-- Vaciar papelera desde el menú contextual de la carpeta
+- Vaciar papelera y **marcar carpeta como leída** desde el menú contextual de la carpeta
 - Exportar mensaje a `.eml` o carpeta completa a `.mbox`
 - Marcar como leído / no leído
 - Marcar categoría (importante, spam, normal) desde barra, menú o clic derecho
 - Menú contextual en el listado (abrir, copiar remitente, actualizar carpeta…)
-- Atajos: `Ctrl+R`, `Ctrl+Shift+R`, `Ctrl+L`, `Supr`, `F5`, `Enter` (abrir mensaje), `Ctrl+U` / `Ctrl+Shift+U` (no leído / leído), `Ctrl+Shift+M` (mover) — [tabla completa](keyboard-shortcuts.md)
+- Atajos: `Ctrl+R`, `Ctrl+Shift+R`, `Ctrl+L`, `Supr`, `F5`, `Enter` (abrir mensaje), `Ctrl+U` / `Ctrl+Shift+U` (no leído / leído), `Ctrl+D` (destacar), `Ctrl+E` (archivar), `Ctrl+Shift+M` (mover) — [tabla completa](keyboard-shortcuts.md)
 - Mensajes cuando la carpeta o la búsqueda no devuelven resultados
 
 ## Redacción
@@ -102,6 +107,7 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - **OpenPGP opcional** (GnuPG): cifrar y firmar al enviar; descifrar y verificar al leer (sin impacto en la sincronización)
 - Borradores precargados al responder o reenviar (cita HTML del mensaje original)
 - Guardar borrador en la carpeta Drafts del servidor
+- **Autoguardado de borradores**: mientras redactas, el borrador se guarda solo cada 30 s en la carpeta Borradores (reescribe la copia anterior en vez de acumularla); al enviar se elimina la copia autoguardada
 - **Abrir y editar borradores** desde la carpeta Borradores (doble clic)
 - Tras enviar, opción de **abrir la carpeta Enviados**
 - Firma insertada automáticamente al redactar
@@ -142,6 +148,14 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - **Tema claro u oscuro** (Archivo → Preferencias → Apariencia)
 - Ventana principal maximizada en el **monitor principal** al arrancar
 - Estilos unificados en tablas, botones, menús y diálogos (`pyqorreos/ui/theme.py`)
+
+## Ayuda y documentación
+
+- **Documentación integrada** en **Ayuda → Documentación** (`F1`): visor con índice navegable a la izquierda y el contenido a la derecha
+- Reúne el README y todas las guías de `docs/` (características, instalación, uso, atajos, estructura, configuración, calidad e historial de cambios)
+- **Navegación** siguiendo los enlaces internos entre documentos, botón **Atrás** y **búsqueda** dentro de la página; los enlaces externos se abren en el navegador
+- Ventana **no modal**: puedes consultarla mientras sigues usando el correo
+- Botón **Ver en GitHub** para la documentación en línea
 
 ---
 

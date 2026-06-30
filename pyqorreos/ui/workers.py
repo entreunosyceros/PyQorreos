@@ -381,6 +381,69 @@ class SetSeenWorker(QThread):
             self.signals.error.emit(friendly_mail_error(exc))
 
 
+class MarkFolderSeenWorker(QThread):
+    """Marca como leídos (o no leídos) todos los mensajes de una carpeta."""
+
+    def __init__(
+        self,
+        service: MailService,
+        folder: str,
+        seen: bool = True,
+        cache: MailCache | None = None,
+        account_id: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.folder = folder
+        self.seen = seen
+        self.cache = cache
+        self.account_id = account_id
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            count = self.service.mark_folder_seen(self.folder, self.seen)
+            if self.cache and self.account_id and self.folder:
+                self.cache.mark_folder_seen(self.account_id, self.folder, self.seen)
+            self.signals.finished.emit((self.folder, self.seen, count))
+        except Exception as exc:
+            self.signals.error.emit(friendly_mail_error(exc))
+
+
+class SetFlagWorker(QThread):
+    """Destaca o quita el destacado (\\Flagged) de uno o varios mensajes."""
+
+    def __init__(
+        self,
+        service: MailService,
+        uids: list[str],
+        flagged: bool,
+        cache: MailCache | None = None,
+        account_id: str = "",
+        folder: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.uids = list(uids)
+        self.flagged = flagged
+        self.cache = cache
+        self.account_id = account_id
+        self.folder = folder
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            for uid in self.uids:
+                self.service.set_flagged(uid, self.flagged, self.folder or None)
+                if self.cache and self.account_id and self.folder:
+                    self.cache.update_flagged(
+                        self.account_id, self.folder, uid, self.flagged
+                    )
+            self.signals.finished.emit((self.uids, self.flagged))
+        except Exception as exc:
+            self.signals.error.emit(friendly_mail_error(exc))
+
+
 class SendMailWorker(QThread):
     def __init__(
         self,
@@ -713,17 +776,27 @@ class FetchAttachmentWorker(QThread):
 
 
 class SaveDraftWorker(QThread):
-    def __init__(self, service: MailService, folder: str, raw_message: bytes) -> None:
+    def __init__(
+        self,
+        service: MailService,
+        folder: str,
+        raw_message: bytes,
+        *,
+        replace_uid: str | None = None,
+    ) -> None:
         super().__init__()
         self.service = service
         self.folder = folder
         self.raw_message = raw_message
+        self.replace_uid = replace_uid
         self.signals = WorkerSignals()
 
     def run(self) -> None:
         try:
-            self.service.save_draft(self.folder, self.raw_message)
-            self.signals.finished.emit(True)
+            new_uid = self.service.save_draft(
+                self.folder, self.raw_message, replace_uid=self.replace_uid
+            )
+            self.signals.finished.emit(new_uid)
         except Exception as exc:
             self.signals.error.emit(friendly_mail_error(exc))
 

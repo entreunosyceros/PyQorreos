@@ -49,6 +49,7 @@ PyQorreos/
         ├── account_dialog.py       # Alta/edición de una cuenta
         ├── accounts_manager_dialog.py
         ├── about_dialog.py
+        ├── documentation_dialog.py # Visor de documentación integrado (Ayuda → Documentación)
         ├── preferences_dialog.py   # Preferencias (general, plantillas, clasificación, OAuth)
         ├── address_book_dialog.py    # Agenda de contactos
         ├── classification_rules_widget.py  # Editor de reglas importante/spam

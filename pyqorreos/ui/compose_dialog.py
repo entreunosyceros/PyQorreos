@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import html as html_module
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -44,7 +44,14 @@ from pyqorreos.core.user_preferences import DEFAULT_COMPOSE_SNIPPETS
 from pyqorreos.ui.rich_compose_editor import RichComposeEditor
 from pyqorreos.ui.address_book_dialog import AddressBookDialog
 from pyqorreos.ui.theme import mark_role, resolve_theme_from_parent
-from pyqorreos.ui.workers import SaveDraftWorker, SendMailWorker
+from pyqorreos.ui.workers import (
+    DeleteMessagesWorker,
+    SaveDraftWorker,
+    SendMailWorker,
+)
+
+# Intervalo del autoguardado de borradores (ms).
+AUTOSAVE_INTERVAL_MS = 30_000
 
 class ComposeDialog(QDialog):
     """Diálogo para redactar y enviar un correo."""
@@ -84,6 +91,13 @@ class ComposeDialog(QDialog):
         self._snippets = snippets or list(DEFAULT_COMPOSE_SNIPPETS)
         self._attachments: list[EmailAttachment] = []
         self._request_read_receipt_default = request_read_receipt_default
+        # Estado del autoguardado de borradores.
+        self._autosave_uid: str | None = None
+        self._autosave_dirty = False
+        self._autosave_in_progress = False
+        self._autosave_worker: SaveDraftWorker | None = None
+        self._cleanup_worker: DeleteMessagesWorker | None = None
+        self._sending = False
         self.setWindowTitle(title)
         self.setMinimumSize(720, 560)
         self.resize(820, 620)
@@ -91,6 +105,7 @@ class ComposeDialog(QDialog):
         self._theme = resolve_theme_from_parent(parent)
         self._build_ui()
         self._load_draft()
+        self._setup_autosave()
 
     def _configure_window_flags(self) -> None:
         """Permite minimizar y maximizar como una ventana normal."""
@@ -308,15 +323,13 @@ class ComposeDialog(QDialog):
         self.attach_list.takeItem(row)
         del self._attachments[row]
 
-    def _save_draft(self) -> None:
-        if not self._drafts_folder:
-            return
+    def _build_draft_raw(self) -> bytes | None:
+        """Construye el borrador en bytes; devuelve None si no hay contenido."""
         plain = self.body_editor.plain_text().strip()
         html = prepare_outgoing_html(self.body_editor.html())
         if not plain and not html:
-            QMessageBox.warning(self, "Borrador vacío", "Escribe algo antes de guardar.")
-            return
-        raw = build_draft_bytes(
+            return None
+        return build_draft_bytes(
             from_email=self.service.account.email,
             display_name=self.service.account.display_name,
             to=self.to_edit.text().strip(),
@@ -327,15 +340,87 @@ class ComposeDialog(QDialog):
             body_html=html,
             request_read_receipt=self.read_receipt_check.isChecked(),
         )
+
+    def _save_draft(self) -> None:
+        if not self._drafts_folder:
+            return
+        raw = self._build_draft_raw()
+        if raw is None:
+            QMessageBox.warning(self, "Borrador vacío", "Escribe algo antes de guardar.")
+            return
+        self._autosave_timer.stop()
         self.setEnabled(False)
-        worker = SaveDraftWorker(self.service, self._drafts_folder, raw)
+        worker = SaveDraftWorker(
+            self.service,
+            self._drafts_folder,
+            raw,
+            replace_uid=self._autosave_uid,
+        )
         worker.signals.finished.connect(self._on_draft_saved)
         worker.signals.error.connect(self._on_error)
         worker.start()
+        # Mantener viva la referencia hasta que termine.
+        self._autosave_worker = worker
 
-    def _on_draft_saved(self, _) -> None:
+    def _on_draft_saved(self, _new_uid) -> None:
+        # El borrador manual sustituye al autoguardado: ya no queda pendiente.
+        self._autosave_uid = None
         QMessageBox.information(self, "Borrador", "Borrador guardado en el servidor.")
         self.accept()
+
+    def _setup_autosave(self) -> None:
+        """Programa el autoguardado periódico del borrador en el servidor."""
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(AUTOSAVE_INTERVAL_MS)
+        self._autosave_timer.timeout.connect(self._autosave_draft)
+        if not self._drafts_folder:
+            return
+        for edit in (self.to_edit, self.cc_edit, self.bcc_edit, self.subject_edit):
+            edit.textChanged.connect(self._mark_autosave_dirty)
+        self.body_editor.editor.textChanged.connect(self._mark_autosave_dirty)
+        self._autosave_timer.start()
+
+    def _mark_autosave_dirty(self, *_args) -> None:
+        self._autosave_dirty = True
+
+    def _autosave_draft(self) -> None:
+        if (
+            not self._drafts_folder
+            or self._sending
+            or self._autosave_in_progress
+            or not self._autosave_dirty
+        ):
+            return
+        raw = self._build_draft_raw()
+        if raw is None:
+            return
+        self._autosave_dirty = False
+        self._autosave_in_progress = True
+        worker = SaveDraftWorker(
+            self.service,
+            self._drafts_folder,
+            raw,
+            replace_uid=self._autosave_uid,
+        )
+        worker.signals.finished.connect(self._on_autosave_done)
+        worker.signals.error.connect(self._on_autosave_error)
+        worker.start()
+        self._autosave_worker = worker
+
+    def _on_autosave_done(self, new_uid) -> None:
+        self._autosave_in_progress = False
+        if new_uid:
+            self._autosave_uid = str(new_uid)
+        self.setWindowTitle(self._autosave_title())
+
+    def _on_autosave_error(self, _message: str) -> None:
+        # El autoguardado es silencioso: reintenta en el siguiente ciclo.
+        self._autosave_in_progress = False
+        self._autosave_dirty = True
+
+    def _autosave_title(self) -> str:
+        base = self.windowTitle().split("  •")[0]
+        return f"{base}  • borrador guardado"
 
     def _send(self) -> None:
         to = self.to_edit.text().strip()
@@ -379,6 +464,8 @@ class ComposeDialog(QDialog):
                 if reply != QMessageBox.StandardButton.Yes:
                     return
 
+        self._sending = True
+        self._autosave_timer.stop()
         self.setEnabled(False)
         sign = bool(self.openpgp_sign_check and self.openpgp_sign_check.isChecked())
         encrypt = bool(
@@ -403,6 +490,7 @@ class ComposeDialog(QDialog):
         self.worker.start()
 
     def _on_sent(self, _) -> None:
+        self._discard_autosaved_draft()
         if self._sent_folder:
             reply = QMessageBox.question(
                 self,
@@ -418,8 +506,29 @@ class ComposeDialog(QDialog):
             QMessageBox.information(self, "Enviado", "El correo se envió correctamente.")
         self.accept()
 
+    def _discard_autosaved_draft(self) -> None:
+        """Elimina el borrador autoguardado tras enviar (evita copias huérfanas)."""
+        if not self._autosave_uid or not self._drafts_folder:
+            return
+        worker = DeleteMessagesWorker(
+            self.service,
+            [self._autosave_uid],
+            folder=self._drafts_folder,
+        )
+        # Sin caché de cuenta aquí: la limpieza es best-effort y silenciosa.
+        worker.signals.finished.connect(lambda _payload: None)
+        worker.signals.error.connect(lambda _message: None)
+        worker.start()
+        self._cleanup_worker = worker
+        self._autosave_uid = None
+        worker.wait(3000)
+
     def _on_error(self, message: str) -> None:
         self.setEnabled(True)
+        self._sending = False
+        self._autosave_in_progress = False
+        if self._drafts_folder and not self._autosave_timer.isActive():
+            self._autosave_timer.start()
         if (
             self.read_receipt_check.isChecked()
             and is_microsoft_email(self.service.account.email)
@@ -430,3 +539,7 @@ class ComposeDialog(QDialog):
                 "Desactiva la VPN o excluye smtp.office365.com del túnel y vuelve a intentar."
             )
         QMessageBox.critical(self, "Error", message)
+
+    def reject(self) -> None:
+        self._autosave_timer.stop()
+        super().reject()

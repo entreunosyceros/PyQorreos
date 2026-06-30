@@ -1102,6 +1102,40 @@ class MailService:
         except (imaplib.IMAP4.error, OSError):
             pass
 
+    def mark_folder_seen(self, folder: str, seen: bool = True) -> int:
+        """Marca como leídos (o no leídos) todos los mensajes de una carpeta.
+
+        Devuelve el número de mensajes afectados.
+        """
+        target = folder or self._current_folder or "INBOX"
+        flag_op = "+FLAGS" if seen else "-FLAGS"
+        with self._imap_lock:
+            self._ensure_connected_unlocked()
+            imap = self._require_imap()
+            previous = self._current_folder
+            try:
+                self._ensure_selected_unlocked(imap, target)
+                criterion = "UNSEEN" if seen else "SEEN"
+                status, data = imap.uid("search", None, criterion)
+                if status != "OK" or not data or not data[0]:
+                    return 0
+                uids = data[0].split()
+                if not uids:
+                    return 0
+                ids = [u.decode() if isinstance(u, bytes) else str(u) for u in uids]
+                batch_size = 200
+                for start in range(0, len(ids), batch_size):
+                    chunk = ids[start : start + batch_size]
+                    imap.uid("store", ",".join(chunk), flag_op, "(\\Seen)")
+                return len(ids)
+            finally:
+                if previous and previous != target:
+                    try:
+                        self._select_on_imap(imap, previous)
+                        self._current_folder = previous
+                    except imaplib.IMAP4.error:
+                        pass
+
     def update_classifier(self, classifier: MailClassifier) -> None:
         """Actualiza las reglas de clasificación en caliente."""
         self.classifier = classifier
@@ -1386,12 +1420,25 @@ class MailService:
                     counts[folder] = 0
         return counts
 
-    def save_draft(self, folder: str, raw_message: bytes) -> None:
-        """Guarda un borrador en la carpeta IMAP indicada (APPEND)."""
+    def save_draft(
+        self,
+        folder: str,
+        raw_message: bytes,
+        *,
+        replace_uid: str | None = None,
+    ) -> str | None:
+        """Guarda un borrador en la carpeta IMAP indicada (APPEND).
+
+        Si ``replace_uid`` apunta a un borrador anterior en la misma carpeta, se
+        elimina tras añadir el nuevo (útil para el autoguardado, que reescribe
+        el borrador en vez de acumular copias). Devuelve el UID del borrador
+        recién creado cuando el servidor soporta UIDPLUS (APPENDUID); en caso
+        contrario, ``None``.
+        """
         with self._imap_lock:
             self._ensure_connected_unlocked()
             imap = self._require_imap()
-            status, _ = imap.append(
+            status, data = imap.append(
                 self._quoted_folder(folder),
                 "\\Draft",
                 None,
@@ -1399,6 +1446,33 @@ class MailService:
             )
             if status != "OK":
                 raise RuntimeError(f"No se pudo guardar borrador en {folder}")
+            new_uid = self._parse_appenduid(data)
+            if replace_uid:
+                try:
+                    self._ensure_selected_unlocked(imap, folder)
+                    imap.uid("store", replace_uid, "+FLAGS", "(\\Deleted)")
+                    imap.expunge()
+                except imaplib.IMAP4.error:
+                    pass
+            return new_uid
+
+    @staticmethod
+    def _parse_appenduid(data) -> str | None:
+        """Extrae el UID de la respuesta APPENDUID (extensión UIDPLUS)."""
+        if not data:
+            return None
+        for item in data:
+            raw = item
+            if isinstance(raw, (list, tuple)):
+                raw = raw[0] if raw else b""
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            if not isinstance(raw, str):
+                continue
+            match = re.search(r"APPENDUID\s+\d+\s+(\d+)", raw, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        return None
 
     def fetch_raw_bytes(self, uid: str, folder: str | None = None) -> bytes:
         """Devuelve el mensaje completo en formato RFC822."""

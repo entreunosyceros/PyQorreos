@@ -28,19 +28,20 @@ La ventana permanece usable mientras conecta; no hace falta pulsar «Actualizar�
 4. Opcional: define una **firma** en el diálogo de cuenta.
 5. Cambia de cuenta con el desplegable **Cuenta:**.
 6. Navega por el **árbol de carpetas**; **doble clic** en un mensaje (o `Enter`) para abrirlo.
-7. Usa la **barra de búsqueda** y los filtros sobre la lista de mensajes. En **Preferencias → General → Vista** puedes activar **buscar en todas las carpetas** (solo cabeceras en caché).
+7. Usa la **barra de búsqueda** y los filtros sobre la lista de mensajes. Marca **«En el cuerpo»** para buscar también dentro del texto de los mensajes ya descargados (índice FTS5) y **«Solo destacados»** para ver solo los favoritos. En **Preferencias → General → Vista** puedes activar **buscar en todas las carpetas** (solo cabeceras en caché).
 8. En el visor: **Mostrar imágenes remotas** (si están bloqueadas), **Traducir**, **Modo lectura** o **Texto plano** según necesites.
 9. **Redactar** (`Ctrl+N`) o **Responder** (`Ctrl+R`) con el editor enriquecido y plantillas. El selector **Ortografía** (español / inglés / ambos) activa el corrector mientras escribes; clic derecho en una palabra subrayada para ver sugerencias. Marca **Solicitar acuse de recibo** si quieres pedir confirmación de lectura al destinatario (no todos los clientes lo admiten). En **Preferencias → General → Redacción** puedes dejar esa casilla marcada por defecto.
 10. Si un mensaje recibido pide acuse de lectura, el visor muestra un aviso con **Enviar acuse** o **Descartar**.
-11. En **Borradores**, **doble clic** abre el borrador en el editor para seguir editándolo. Tras **enviar**, puedes elegir abrir la carpeta **Enviados**.
+11. En **Borradores**, **doble clic** abre el borrador en el editor para seguir editándolo. Mientras redactas, el **borrador se autoguarda** cada 30 s en la carpeta Borradores (reescribe la copia anterior); al **enviar** se elimina la copia autoguardada y puedes elegir abrir la carpeta **Enviados**.
 12. **Agenda de contactos** (`Ctrl+Shift+A`): guarda direcciones que uses a menudo. Al redactar, usa **Agenda…** o el autocompletado en Para/CC/CCO. Desde el listado: clic derecho → **Guardar remitente en la agenda…**
-13. Clic derecho en el listado, en una carpeta o en la bandeja del sistema para más acciones. Un **clic en la notificación** de correo nuevo abre la carpeta o el mensaje.
+13. Clic derecho en el listado, en una carpeta o en la bandeja del sistema para más acciones. Desde el listado puedes **destacar** (★, `Ctrl+D`) y **archivar** (`Ctrl+E`) los mensajes seleccionados; desde una carpeta, **marcarla entera como leída**. Un **clic en la notificación** de correo nuevo abre la carpeta o el mensaje.
 14. **Renombrar una carpeta** de usuario: clic derecho → **Renombrar carpeta…**, **doble clic** sobre ella o tecla **`F2`**. Las carpetas del sistema (INBOX, Enviados, Papelera…) están protegidas.
-14. Ajusta el comportamiento en **Archivo → Preferencias…** (`Ctrl+,`): sync, imágenes, idioma de traducción, plantillas, **clasificación** (reglas aprendidas), OAuth…
+15. Ajusta el comportamiento en **Archivo → Preferencias…** (`Ctrl+,`): sync, imágenes, idioma de traducción, plantillas, **clasificación** (reglas aprendidas), OAuth…
+16. ¿Dudas sobre el programa? Abre **Ayuda → Documentación** (`F1`): un visor con toda la documentación del proyecto (características, uso, atajos, configuración…), con índice a la izquierda, navegación por enlaces y buscador. Es una ventana independiente, así que puedes consultarla mientras sigues con el correo.
 
 ## Selección múltiple
 
-En la lista de mensajes puedes usar **selección múltiple** (`Ctrl+clic`, `Shift+clic`) para eliminar o mover varios correos a la vez. Atajos útiles: `Ctrl+U` / `Ctrl+Shift+U` (no leído / leído), `Ctrl+Shift+M` (mover). Al eliminar varios mensajes verás un aviso en la barra de estado y una barra de progreso mientras se procesa la operación en el servidor.
+En la lista de mensajes puedes usar **selección múltiple** (`Ctrl+clic`, `Shift+clic`) para eliminar, mover, destacar o archivar varios correos a la vez. Atajos útiles: `Ctrl+U` / `Ctrl+Shift+U` (no leído / leído), `Ctrl+D` (destacar), `Ctrl+E` (archivar), `Ctrl+Shift+M` (mover). Al eliminar varios mensajes verás un aviso en la barra de estado y una barra de progreso mientras se procesa la operación en el servidor.
 
 Si la carpeta está vacía o la búsqueda no devuelve resultados, la lista muestra un mensaje explicativo en lugar de quedar en blanco.
 

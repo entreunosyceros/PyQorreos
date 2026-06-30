@@ -8,6 +8,7 @@ y sincronizar solo mensajes nuevos con el servidor.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -71,6 +72,7 @@ class MailCache:
     def __init__(self, db_path: Path | None = None) -> None:
         self.db_path = db_path or CACHE_DB
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._fts_available = False
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -117,6 +119,82 @@ class MailCache:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
             self._migrate_schema(conn)
+            self._init_fts(conn)
+
+    def _init_fts(self, conn: sqlite3.Connection) -> None:
+        """Crea el índice FTS5 para buscar en el cuerpo (si el motor lo soporta)."""
+        try:
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
+                    account_id UNINDEXED,
+                    folder UNINDEXED,
+                    uid UNINDEXED,
+                    subject,
+                    sender,
+                    body,
+                    tokenize = 'unicode61 remove_diacritics 2'
+                )
+                """
+            )
+            self._fts_available = True
+        except sqlite3.OperationalError:
+            # SQLite compilado sin FTS5: la búsqueda en el cuerpo usará LIKE.
+            self._fts_available = False
+
+    @staticmethod
+    def _fts_match_query(query: str) -> str:
+        """Convierte el texto del usuario en una consulta MATCH segura para FTS5."""
+        terms = [t for t in re.split(r"\s+", query.strip()) if t]
+        parts: list[str] = []
+        for term in terms:
+            escaped = term.replace('"', '""')
+            parts.append(f'"{escaped}"*')
+        return " ".join(parts)
+
+    def _fts_upsert(
+        self, conn: sqlite3.Connection, account_id: str, folder: str, message: MailMessage
+    ) -> None:
+        if not self._fts_available:
+            return
+        conn.execute(
+            "DELETE FROM message_fts WHERE account_id = ? AND folder = ? AND uid = ?",
+            (account_id, folder, message.uid),
+        )
+        conn.execute(
+            """
+            INSERT INTO message_fts (account_id, folder, uid, subject, sender, body)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                account_id,
+                folder,
+                message.uid,
+                message.subject or "",
+                message.sender or "",
+                message.body_text or "",
+            ),
+        )
+
+    def _fts_delete(
+        self,
+        conn: sqlite3.Connection,
+        account_id: str,
+        folder: str | None = None,
+        uids: set[str] | None = None,
+    ) -> None:
+        if not self._fts_available:
+            return
+        sql = "DELETE FROM message_fts WHERE account_id = ?"
+        params: list[object] = [account_id]
+        if folder is not None:
+            sql += " AND folder = ?"
+            params.append(folder)
+        if uids:
+            placeholders = ",".join("?" * len(uids))
+            sql += f" AND uid IN ({placeholders})"
+            params.extend(uids)
+        conn.execute(sql, params)
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
         """Añade columnas nuevas en bases de datos existentes."""
@@ -208,6 +286,7 @@ class MailCache:
                 "DELETE FROM message_bodies WHERE account_id = ? AND folder = ?",
                 (account_id, folder),
             )
+            self._fts_delete(conn, account_id, folder)
 
     def rename_folder(self, account_id: str, old_folder: str, new_folder: str) -> None:
         """Actualiza la ruta de una carpeta en la caché local (mensajes y cuerpos)."""
@@ -218,6 +297,12 @@ class MailCache:
                 conn.execute(
                     f"UPDATE {table} SET folder = ? "
                     f"WHERE account_id = ? AND folder = ?",
+                    (new_folder, account_id, old_folder),
+                )
+            if self._fts_available:
+                conn.execute(
+                    "UPDATE message_fts SET folder = ? "
+                    "WHERE account_id = ? AND folder = ?",
                     (new_folder, account_id, old_folder),
                 )
 
@@ -243,6 +328,7 @@ class MailCache:
                 f"DELETE FROM message_bodies WHERE account_id = ? AND folder = ? AND uid IN ({placeholders})",
                 params,
             )
+            self._fts_delete(conn, account_id, folder, set(uids))
 
     def save_batch(
         self,
@@ -403,6 +489,48 @@ class MailCache:
                 ).fetchall()
         return {str(row["folder"]): int(row["n"]) for row in rows}
 
+    def _search_body_keys(
+        self, account_id: str, folder: str | None, query: str
+    ) -> list[tuple[str, str]]:
+        """Devuelve pares (carpeta, uid) cuyo cuerpo/asunto/remitente coincide.
+
+        Usa FTS5 cuando está disponible y, si falla o no existe, recurre a LIKE
+        sobre la tabla de cuerpos en caché.
+        """
+        q = query.strip()
+        if not q:
+            return []
+        if self._fts_available:
+            match = self._fts_match_query(q)
+            if match:
+                sql = (
+                    "SELECT folder, uid FROM message_fts "
+                    "WHERE message_fts MATCH ? AND account_id = ?"
+                )
+                params: list[object] = [match, account_id]
+                if folder is not None:
+                    sql += " AND folder = ?"
+                    params.append(folder)
+                try:
+                    with self._connect() as conn:
+                        rows = conn.execute(sql, params).fetchall()
+                    return [(str(r["folder"]), str(r["uid"])) for r in rows]
+                except sqlite3.OperationalError:
+                    pass
+        like = f"%{q}%"
+        sql = (
+            "SELECT folder, uid FROM message_bodies WHERE account_id = ? "
+            "AND (subject LIKE ? COLLATE NOCASE OR sender LIKE ? COLLATE NOCASE "
+            "OR body_text LIKE ? COLLATE NOCASE)"
+        )
+        params = [account_id, like, like, like]
+        if folder is not None:
+            sql += " AND folder = ?"
+            params.append(folder)
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [(str(r["folder"]), str(r["uid"])) for r in rows]
+
     def query_summaries(
         self,
         account_id: str,
@@ -411,7 +539,9 @@ class MailCache:
         query: str = "",
         category: str | None = None,
         unread_only: bool = False,
+        flagged_only: bool = False,
         sort_by: str = "date_desc",
+        search_body: bool = False,
     ) -> list[MailSummary]:
         """Filtra y ordena en SQLite (búsqueda rápida sin recorrer toda la lista en Python)."""
         clauses = ["account_id = ?"]
@@ -420,7 +550,15 @@ class MailCache:
             clauses.append("folder = ?")
             params.append(folder)
         q = query.strip()
-        if q:
+        if q and search_body:
+            keys = self._search_body_keys(account_id, folder, q)
+            if not keys:
+                return []
+            tuples_sql = ",".join(["(?,?)"] * len(keys))
+            clauses.append(f"(folder, uid) IN (VALUES {tuples_sql})")
+            for key_folder, key_uid in keys:
+                params.extend([key_folder, key_uid])
+        elif q:
             like = f"%{q}%"
             clauses.append(
                 "(subject LIKE ? COLLATE NOCASE OR sender LIKE ? COLLATE NOCASE)"
@@ -431,6 +569,8 @@ class MailCache:
             params.append(category)
         if unread_only:
             clauses.append("seen = 0")
+        if flagged_only:
+            clauses.append("flagged = 1")
         order_sql = {
             "date_asc": "COALESCE(date_iso, '') ASC, sort_index ASC",
             "sender": "LOWER(sender) ASC, sort_index ASC",
@@ -476,6 +616,33 @@ class MailCache:
                 (int(seen), account_id, folder, uid),
             )
 
+    def mark_folder_seen(self, account_id: str, folder: str, seen: bool = True) -> int:
+        """Marca como leídos (o no leídos) todos los mensajes de una carpeta.
+
+        Devuelve el número de mensajes cuyo estado cambió.
+        """
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE messages SET seen = ?
+                WHERE account_id = ? AND folder = ? AND seen = ?
+                """,
+                (int(seen), account_id, folder, int(not seen)),
+            )
+            return cursor.rowcount or 0
+
+    def update_flagged(
+        self, account_id: str, folder: str, uid: str, flagged: bool
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE messages SET flagged = ?
+                WHERE account_id = ? AND folder = ? AND uid = ?
+                """,
+                (int(flagged), account_id, folder, uid),
+            )
+
     def save_message_body(
         self, account_id: str, folder: str, message: MailMessage
     ) -> None:
@@ -516,6 +683,7 @@ class MailCache:
                     pgp_json,
                 ),
             )
+            self._fts_upsert(conn, account_id, folder, message)
 
     def load_message_body(
         self, account_id: str, folder: str, uid: str
@@ -578,6 +746,7 @@ class MailCache:
                 "DELETE FROM message_bodies WHERE account_id = ? AND folder = ? AND uid = ?",
                 (account_id, folder, uid),
             )
+            self._fts_delete(conn, account_id, folder, {uid})
 
     def delete_account(self, account_id: str) -> None:
         """Elimina toda la caché de una cuenta."""
@@ -594,3 +763,4 @@ class MailCache:
                 "DELETE FROM account_folders WHERE account_id = ?",
                 (account_id,),
             )
+            self._fts_delete(conn, account_id)

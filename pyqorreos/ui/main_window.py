@@ -48,6 +48,7 @@ from pyqorreos.core.classifier import MailCategory, extract_email_address
 from pyqorreos.core.compose_utils import format_bytes
 from pyqorreos.core.folder_utils import (
     can_delete_folder,
+    find_archive_folder,
     find_drafts_folder,
     find_trash_folder,
     folder_descendants,
@@ -71,6 +72,7 @@ from pyqorreos.core.settings import Settings
 from pyqorreos.core.translate import language_label
 from pyqorreos.core.user_preferences import UserPreferences, load_preferences, save_preferences
 from pyqorreos.ui.about_dialog import AboutDialog, LOGO_PATH
+from pyqorreos.ui.documentation_dialog import DocumentationDialog
 from pyqorreos.ui.account_dialog import AccountDialog
 from pyqorreos.ui.accounts_manager_dialog import AccountsManagerDialog
 from pyqorreos.ui.address_book_dialog import AddressBookDialog
@@ -107,9 +109,11 @@ from pyqorreos.ui.workers import (
     FetchMessageWorker,
     FolderUnreadWorker,
     LoadFolderWorker,
+    MarkFolderSeenWorker,
     MoveMessagesWorker,
     RenameFolderWorker,
     SendReadReceiptWorker,
+    SetFlagWorker,
     SetSeenWorker,
     StorageQuotaWorker,
     SyncFolderWorker,
@@ -362,8 +366,16 @@ class MainWindow(QMainWindow):
         self.search_edit.setPlaceholderText("Asunto o remitente…")
         self.search_edit.setMinimumWidth(80)
         self.search_edit.textChanged.connect(lambda _text: self._search_timer.start())
+        self.search_body_check = QCheckBox("En el cuerpo")
+        self.search_body_check.setToolTip(
+            "Buscar también dentro del texto de los mensajes descargados (FTS)"
+        )
+        self.search_body_check.toggled.connect(self._apply_list_filters)
         self.unread_only_check = QCheckBox("Solo no leídos")
         self.unread_only_check.toggled.connect(self._apply_list_filters)
+        self.flag_filter_check = QCheckBox("Solo destacados")
+        self.flag_filter_check.setToolTip("Mostrar solo los mensajes destacados (★)")
+        self.flag_filter_check.toggled.connect(self._apply_list_filters)
         self.category_filter = QComboBox()
         self.category_filter.addItems(["Todos", "Normal", "Importante", "Spam"])
         self.category_filter.currentTextChanged.connect(self._apply_category_filter)
@@ -388,10 +400,12 @@ class MainWindow(QMainWindow):
         filter_row1 = QHBoxLayout()
         filter_row1.addWidget(QLabel("Buscar:"))
         filter_row1.addWidget(self.search_edit, 1)
+        filter_row1.addWidget(self.search_body_check)
         filter_row1.addWidget(self.unread_only_check)
         filter_row2 = QHBoxLayout()
         filter_row2.addWidget(QLabel("Filtrar:"))
         filter_row2.addWidget(self.category_filter)
+        filter_row2.addWidget(self.flag_filter_check)
         filter_row2.addWidget(QLabel("Orden:"))
         filter_row2.addWidget(self.sort_combo, 1)
         header_layout.addLayout(filter_row1)
@@ -435,6 +449,10 @@ class MainWindow(QMainWindow):
         mark_unread_shortcut.activated.connect(lambda: self._mark_selected_seen(False))
         move_shortcut = QShortcut(QKeySequence("Ctrl+Shift+M"), self.message_table)
         move_shortcut.activated.connect(self._show_move_messages_dialog)
+        flag_shortcut = QShortcut(QKeySequence("Ctrl+D"), self.message_table)
+        flag_shortcut.activated.connect(self._toggle_selected_flag)
+        archive_shortcut = QShortcut(QKeySequence("Ctrl+E"), self.message_table)
+        archive_shortcut.activated.connect(self._archive_selected_messages)
         self.message_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.message_table.customContextMenuRequested.connect(
             self._show_message_context_menu
@@ -1013,6 +1031,11 @@ class MainWindow(QMainWindow):
         self._setup_menu_action(self._act_about, "mail", "Acerca de…")
         self._act_about.triggered.connect(self._show_about)
 
+        self._act_documentation = QAction("Documentación", self)
+        self._setup_menu_action(self._act_documentation, "mail", "Documentación")
+        self._act_documentation.setShortcut(QKeySequence(Qt.Key.Key_F1))
+        self._act_documentation.triggered.connect(self._show_documentation)
+
         self._act_preferences = QAction("Preferencias", self)
         self._setup_menu_action(
             self._act_preferences, "settings", "Preferencias", toolbar_compact=""
@@ -1362,6 +1385,21 @@ class MainWindow(QMainWindow):
             unsub_action.triggered.connect(self._unsubscribe_current_message)
 
         menu.addSeparator()
+
+        uid = self._message_uids[row]
+        summary = _selected_summary(uid, self._all_messages)
+        if summary and summary.flagged:
+            flag_action = menu.addAction("☆ Quitar destacado")
+        else:
+            flag_action = menu.addAction("★ Destacar")
+        flag_action.setShortcut(QKeySequence("Ctrl+D"))
+        flag_action.triggered.connect(self._toggle_selected_flag)
+
+        archive_action = menu.addAction("🗄 Archivar")
+        archive_action.setShortcut(QKeySequence("Ctrl+E"))
+        archive_action.triggered.connect(self._archive_selected_messages)
+
+        menu.addSeparator()
         category_menu = menu.addMenu("Marcar como")
         for action in (
             self._act_mark_important,
@@ -1374,8 +1412,6 @@ class MainWindow(QMainWindow):
 
         menu.addSeparator()
 
-        uid = self._message_uids[row]
-        summary = _selected_summary(uid, self._all_messages)
         if summary and not summary.seen:
             mark_read = menu.addAction("Marcar como leído")
             mark_read.triggered.connect(lambda: self._mark_selected_seen(True))
@@ -1761,6 +1797,8 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(self._act_export_folder)
 
         ayuda_menu = self.menuBar().addMenu("Ayuda")
+        ayuda_menu.addAction(self._act_documentation)
+        ayuda_menu.addSeparator()
         ayuda_menu.addAction(self._act_about)
 
     def _show_preferences(self, initial_tab: str | None = None) -> None:
@@ -1815,6 +1853,26 @@ class MainWindow(QMainWindow):
         """Abre el diálogo con información del programa."""
         dialog = AboutDialog(parent=self)
         self._exec_modal(dialog)
+
+    def _show_documentation(self) -> None:
+        """Abre el visor de documentación (no modal: se puede consultar mientras se usa la app)."""
+        existing = getattr(self, "_docs_dialog", None)
+        if existing is not None:
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
+        dialog = DocumentationDialog(parent=self)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        def _clear_ref() -> None:
+            self._docs_dialog = None
+
+        dialog.finished.connect(lambda _result: _clear_ref())
+        self._docs_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Principal")
@@ -2300,6 +2358,12 @@ class MainWindow(QMainWindow):
             )
         menu.addSeparator()
 
+        mark_read = menu.addAction("Marcar carpeta como leída")
+        mark_read.triggered.connect(
+            lambda _checked=False, f=folder: self._mark_folder_seen(f, True)
+        )
+        menu.addSeparator()
+
         if is_trash_folder(folder):
             empty = menu.addAction("Vaciar papelera")
             empty.triggered.connect(lambda: self._empty_folder(folder))
@@ -2313,6 +2377,36 @@ class MainWindow(QMainWindow):
         export_mbox = menu.addAction("Exportar carpeta a .mbox…")
         export_mbox.triggered.connect(self._export_current_folder_mbox)
         menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
+
+    def _mark_folder_seen(self, folder: str, seen: bool = True) -> None:
+        if not self.mail_service or not self.current_account:
+            return
+        self.status_bar.showMessage(f"Marcando «{folder}» como leída…")
+        worker = MarkFolderSeenWorker(
+            self.mail_service,
+            folder,
+            seen,
+            self.mail_cache,
+            self.current_account.id,
+        )
+        worker.signals.finished.connect(self._on_folder_marked_seen)
+        worker.signals.error.connect(self._on_sync_error)
+        worker.start()
+        self._track_worker(worker)
+
+    def _on_folder_marked_seen(self, payload) -> None:
+        folder, seen, count = payload
+        if folder == self._current_folder:
+            for summary in self._all_messages:
+                summary.seen = seen
+            self._render_message_table()
+        self._refresh_folder_unread_counts()
+        if count:
+            self.status_bar.showMessage(
+                f"{count} mensaje(s) marcados como leídos en «{folder}»"
+            )
+        else:
+            self.status_bar.showMessage(f"«{folder}» ya estaba al día")
 
     def _empty_folder(self, folder: str) -> None:
         if not self.mail_service or not self.current_account:
@@ -2582,6 +2676,10 @@ class MainWindow(QMainWindow):
             self.search_edit.blockSignals(True)
             self.search_edit.clear()
             self.search_edit.blockSignals(False)
+            for check in (self.search_body_check, self.flag_filter_check):
+                check.blockSignals(True)
+                check.setChecked(False)
+                check.blockSignals(False)
 
             self._all_messages = []
             self._render_message_table()
@@ -2952,12 +3050,20 @@ class MainWindow(QMainWindow):
         category = mapping.get(choice)
         query = self.search_edit.text().strip()
         unread_only = self.unread_only_check.isChecked()
+        flagged_only = self.flag_filter_check.isChecked()
+        search_body = self.search_body_check.isChecked()
         sort_by = self._current_sort_key()
 
         search_all = bool(
             query and self._prefs.search_all_folders and self.current_account
         )
-        use_db_search = bool(query and self.current_account and (search_all or not self._prefs.thread_view))
+        use_db_search = bool(
+            self.current_account
+            and (
+                (query and (search_all or search_body or not self._prefs.thread_view))
+                or (flagged_only and not self._prefs.thread_view)
+            )
+        )
 
         if use_db_search:
             folder_arg = None if search_all else self._current_folder
@@ -2967,7 +3073,9 @@ class MainWindow(QMainWindow):
                 query=query,
                 category=category.value if category else None,
                 unread_only=unread_only,
+                flagged_only=flagged_only,
                 sort_by=sort_by,
+                search_body=search_body and bool(query),
             )
             if self._prefs.thread_view:
                 messages = self._apply_thread_view(messages)
@@ -2986,6 +3094,8 @@ class MainWindow(QMainWindow):
             ]
         if unread_only:
             messages = [m for m in messages if not m.seen]
+        if flagged_only:
+            messages = [m for m in messages if m.flagged]
         messages = self._apply_thread_view(messages)
         return self._sort_messages(messages)
 
@@ -3040,6 +3150,8 @@ class MainWindow(QMainWindow):
             subject_item = QTableWidgetItem(subject_text)
             if summary.has_attachments:
                 subject_item.setText(f"📎 {subject_item.text()}")
+            if summary.flagged:
+                subject_item.setText(f"★ {subject_item.text()}")
             date_str = (
                 summary.date.strftime("%d/%m/%Y %H:%M")
                 if summary.date
@@ -3127,12 +3239,6 @@ class MainWindow(QMainWindow):
             if self.mail_service:
                 self.mail_service.update_classifier(self.settings.get_classifier())
             self._reclassify_by_sender(summary.sender)
-
-        if self.mail_service:
-            if category == MailCategory.IMPORTANT:
-                self.mail_service.set_flagged(uid, True)
-            elif category == MailCategory.NORMAL:
-                self.mail_service.set_flagged(uid, False)
 
         summary.category = category
         if self.current_account:
@@ -3932,6 +4038,76 @@ class MainWindow(QMainWindow):
         self._render_message_table()
         state = "leído" if seen else "no leído"
         self.status_bar.showMessage(f"Mensaje marcado como {state}")
+
+    def _toggle_selected_flag(self) -> None:
+        """Destaca o quita el destacado (★) de los mensajes seleccionados."""
+        uids = self._selected_message_uids()
+        if not uids or not self.mail_service or not self.current_account:
+            return
+        selected = [m for m in self._all_messages if m.uid in set(uids)]
+        if not selected:
+            return
+        # Si alguno no está destacado, destacamos todos; si todos lo están, los quitamos.
+        new_flagged = any(not m.flagged for m in selected)
+        worker = SetFlagWorker(
+            self.mail_service,
+            uids,
+            new_flagged,
+            self.mail_cache,
+            self.current_account.id,
+            self._current_folder,
+        )
+        worker.signals.finished.connect(self._on_flag_changed)
+        worker.signals.error.connect(self._on_fetch_error)
+        worker.start()
+        self._track_worker(worker)
+
+    def _on_flag_changed(self, payload) -> None:
+        uids, flagged = payload
+        target = set(uids)
+        for summary in self._all_messages:
+            if summary.uid in target:
+                summary.flagged = flagged
+        self._render_message_table()
+        state = "destacado(s)" if flagged else "sin destacar"
+        self.status_bar.showMessage(f"{len(uids)} mensaje(s) {state}")
+
+    def _archive_selected_messages(self) -> None:
+        """Mueve los mensajes seleccionados a la carpeta de archivo."""
+        uids = self._selected_message_uids()
+        if not uids or not self.mail_service or not self.current_account:
+            return
+        archive = find_archive_folder(self._folder_names)
+        if archive and archive != self._current_folder:
+            self._move_selected_messages(archive)
+            return
+        if archive == self._current_folder:
+            self.status_bar.showMessage("Ya estás en la carpeta de archivo")
+            return
+        reply = QMessageBox.question(
+            self,
+            "Archivar",
+            "No se encontró una carpeta de archivo.\n\n¿Crear la carpeta «Archivo»?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.status_bar.showMessage("Creando carpeta «Archivo»…")
+        worker = CreateFolderWorker(self.mail_service, "Archivo")
+        worker.signals.finished.connect(self._on_archive_folder_created)
+        worker.signals.error.connect(self._on_folder_create_error)
+        worker.start()
+        self._track_worker(worker)
+
+    def _on_archive_folder_created(self, payload) -> None:
+        created_path, folders = payload
+        self._folder_names = folders
+        if self.current_account:
+            self.mail_cache.save_account_folders(self.current_account.id, folders)
+        self._refresh_folder_tree(select_folder=self._current_folder)
+        # La selección de mensajes se conserva: movemos a la carpeta recién creada.
+        self._move_selected_messages(created_path)
 
     def _copy_sender_address(self) -> None:
         uid = self._selected_message_uid()

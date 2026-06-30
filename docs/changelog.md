@@ -6,6 +6,18 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ---
 
+## Documentación integrada (reciente)
+
+- Nuevo visor **Ayuda → Documentación** (`F1`): muestra el README y todas las guías de `docs/` dentro de la app, con índice navegable, navegación por enlaces internos, botón **Atrás** y búsqueda en la página. Ventana no modal y botón **Ver en GitHub**. El paquete `.deb` ahora incluye la carpeta `docs/`.
+
+## Búsqueda, destacados, archivar y borradores (reciente)
+
+- **Búsqueda en el cuerpo** con índice **FTS5** (casilla «En el cuerpo»): busca dentro del texto de los mensajes ya descargados, con coincidencia por prefijo y sin acentos; recurre a `LIKE` si el motor SQLite no incluye FTS5.
+- **Destacados** (★): destacar/quitar destacado con `Ctrl+D` o el menú contextual; estrella en el listado y filtro **«Solo destacados»**. El destacado (`\Flagged`) es ahora independiente de la categoría «Importante».
+- **Archivar** mensajes con `Ctrl+E` o el menú contextual: mueve a la carpeta de archivo (Archive/Archivo/[Gmail]/All Mail) y, si no existe, ofrece crear «Archivo».
+- **Marcar toda la carpeta como leída** desde el menú contextual de la carpeta.
+- **Autoguardado de borradores**: mientras redactas, el borrador se guarda solo cada 30 s reescribiendo la copia anterior (UIDPLUS) en lugar de acumular copias; al enviar se elimina la copia autoguardada.
+
 ## Gestión de carpetas y legibilidad (reciente)
 
 - **Renombrar carpetas** de usuario desde el árbol: menú contextual «Renombrar carpeta…», **doble clic** o tecla **`F2`**; las carpetas del sistema están protegidas y se renombran también las subcarpetas en cascada (servidor y caché local).

@@ -11,7 +11,7 @@
 | `~/.config/pyqorreos/contacts.json` | Agenda de contactos (correo, nombre, notas) |
 | `~/.config/pyqorreos/preferences.json` | Preferencias (sync, imágenes, hilos, búsqueda multi-carpeta, idioma de traducción, **tema**, plantillas, **OpenPGP**…) |
 | `~/.config/pyqorreos/gnupg/` | Llavero GnuPG de PyQorreos (si no usas `~/.gnupg` del sistema) |
-| `~/.config/pyqorreos/mail_cache.db` | Caché local de correos |
+| `~/.config/pyqorreos/mail_cache.db` | Caché local de correos (incluye índice **FTS5** para la búsqueda en el cuerpo) |
 | `~/.config/pyqorreos/oauth_clients.json` | Client ID y secret OAuth (Gmail / Microsoft) |
 | Llavero del sistema | Contraseñas y tokens OAuth (vía `keyring`) |
 
@@ -95,6 +95,14 @@ El `refresh_token` se guarda en el llavero de forma permanente; el `access_token
 
 - Si en Gmail aparece una carpeta **Mailspring** (u otra de un cliente antiguo), puedes eliminarla con clic derecho en el árbol → **Eliminar carpeta…** (las carpetas del sistema como INBOX o `[Gmail]/…` están protegidas).
 - **Renombrar una carpeta** de usuario: clic derecho en el árbol → **Renombrar carpeta…**, **doble clic** sobre ella o tecla **`F2`**. Se renombra en el servidor y se actualiza la caché local (incluidas las subcarpetas). Las carpetas del sistema no se pueden renombrar.
+
+### Búsqueda, destacados y borradores
+
+- La casilla **«En el cuerpo»** activa la búsqueda dentro del texto de los mensajes usando un índice **FTS5** en `mail_cache.db`. Solo cubre los mensajes cuyo cuerpo ya está en caché (los que has abierto/descargado); el resto se puede buscar por asunto y remitente como siempre.
+- Si tu instalación de SQLite no incluye FTS5, la búsqueda en el cuerpo recurre automáticamente a `LIKE` (más lenta pero equivalente).
+- El filtro **«Solo destacados»** muestra los mensajes con la estrella (★). Destacar/quitar destacado: `Ctrl+D` o el menú contextual. El destacado usa el flag IMAP `\Flagged` y es independiente de la categoría «Importante».
+- **Archivar** (`Ctrl+E`): mueve los mensajes a la carpeta de archivo (Archive/Archivo o `[Gmail]/All Mail`). Si no se detecta ninguna, PyQorreos ofrece crear «Archivo».
+- **Autoguardado de borradores**: al redactar, el borrador se guarda cada 30 s en la carpeta Borradores reescribiendo la copia anterior (mediante UIDPLUS/APPENDUID cuando el servidor lo soporta). Al enviar el correo se elimina la copia autoguardada para no dejar borradores huérfanos.
 
 ### Bandeja del sistema
 

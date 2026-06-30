@@ -137,6 +137,25 @@ def find_trash_folder(folders: list[str]) -> str | None:
     return None
 
 
+ARCHIVE_KEYWORDS = ("archive", "archivo", "archivados", "all mail", "todos")
+
+
+def is_archive_folder(name: str) -> bool:
+    leaf = folder_leaf(name)
+    return any(k in leaf for k in ARCHIVE_KEYWORDS)
+
+
+def find_archive_folder(folders: list[str]) -> str | None:
+    """Busca la carpeta de archivo (Archive/Archivo/[Gmail]/All Mail)."""
+    for name in folders:
+        if folder_leaf(name) in ("archive", "archivo", "archivados"):
+            return name
+    for name in folders:
+        if is_archive_folder(name):
+            return name
+    return None
+
+
 def build_folder_tree(
     folders: list[str], unread_map: dict[str, int] | None = None
 ) -> list[FolderTreeNode]:
