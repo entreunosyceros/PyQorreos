@@ -610,6 +610,37 @@ class DeleteFolderWorker(QThread):
             self.signals.error.emit(friendly_mail_error(exc))
 
 
+class RenameFolderWorker(QThread):
+    """Renombra una carpeta IMAP y actualiza la caché local."""
+
+    def __init__(
+        self,
+        service: MailService,
+        folder: str,
+        new_name: str,
+        cache: MailCache | None = None,
+        account_id: str = "",
+    ) -> None:
+        super().__init__()
+        self.service = service
+        self.folder = folder
+        self.new_name = new_name
+        self.cache = cache
+        self.account_id = account_id
+        self.signals = WorkerSignals()
+
+    def run(self) -> None:
+        try:
+            mapping = self.service.rename_folder(self.folder, self.new_name)
+            if self.cache and self.account_id:
+                for old_path, new_path in mapping:
+                    self.cache.rename_folder(self.account_id, old_path, new_path)
+            folders = [f.name for f in self.service.list_folders()]
+            self.signals.finished.emit((mapping, folders))
+        except Exception as exc:
+            self.signals.error.emit(friendly_mail_error(exc))
+
+
 class EmptyFolderWorker(QThread):
     def __init__(self, service: MailService, folder: str, cache: MailCache | None = None, account_id: str = "") -> None:
         super().__init__()

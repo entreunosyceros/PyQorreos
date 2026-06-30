@@ -1267,6 +1267,68 @@ class MailService:
             self._current_folder = "INBOX"
         return deleted
 
+    def rename_folder(self, folder: str, new_name: str) -> list[tuple[str, str]]:
+        """
+        Renombra una carpeta IMAP conservando su carpeta padre.
+
+        Devuelve la lista de pares (ruta_antigua, ruta_nueva) afectados,
+        incluidas las subcarpetas que el servidor renombra en cascada.
+        """
+        from pyqorreos.core.folder_utils import folder_descendants, is_protected_folder
+
+        path = folder.strip()
+        if not path:
+            raise ValueError("Indica una carpeta válida")
+        if is_protected_folder(path):
+            raise ValueError(
+                f"La carpeta «{path}» es del sistema y no se puede renombrar"
+            )
+
+        leaf = new_name.strip().strip("/")
+        if not leaf:
+            raise ValueError("El nombre de la carpeta no puede estar vacío")
+        if "/" in leaf or leaf in (".", ".."):
+            raise ValueError("Nombre de carpeta no válido")
+
+        parent = path.rsplit("/", 1)[0] if "/" in path else ""
+        new_path = f"{parent}/{leaf}" if parent else leaf
+        if new_path == path:
+            return []
+
+        all_names = [f.name for f in self.list_folders()]
+        if new_path in all_names:
+            raise RuntimeError(f"Ya existe una carpeta «{new_path}»")
+
+        descendants = folder_descendants(all_names, path)
+
+        with self._imap_lock:
+            self._ensure_connected_unlocked()
+            imap = self._require_imap()
+            status, data = imap.rename(
+                self._quoted_folder(path), self._quoted_folder(new_path)
+            )
+            if status != "OK":
+                detail = ""
+                if data:
+                    raw = data[0] if isinstance(data, (list, tuple)) else data
+                    if isinstance(raw, bytes):
+                        detail = raw.decode("utf-8", errors="replace")
+                    elif raw:
+                        detail = str(raw)
+                raise RuntimeError(
+                    f"No se pudo renombrar la carpeta «{path}»"
+                    + (f": {detail}" if detail else "")
+                )
+
+        # El servidor renombra las subcarpetas en cascada; reflejamos el mismo cambio.
+        mapping = [(path, new_path)]
+        for child in descendants:
+            mapping.append((child, new_path + child[len(path):]))
+
+        if self._current_folder == path or self._current_folder.startswith(path + "/"):
+            self._current_folder = new_path + self._current_folder[len(path):]
+        return mapping
+
     def empty_folder(self, folder: str) -> int:
         """Marca todos los mensajes de una carpeta como eliminados y expunge."""
         with self._imap_lock:

@@ -51,7 +51,9 @@ from pyqorreos.core.folder_utils import (
     find_drafts_folder,
     find_trash_folder,
     folder_descendants,
+    folder_leaf,
     is_drafts_folder,
+    is_protected_folder,
     is_trash_folder,
 )
 from pyqorreos.core.list_unsubscribe import message_has_unsubscribe
@@ -106,6 +108,7 @@ from pyqorreos.ui.workers import (
     FolderUnreadWorker,
     LoadFolderWorker,
     MoveMessagesWorker,
+    RenameFolderWorker,
     SendReadReceiptWorker,
     SetSeenWorker,
     StorageQuotaWorker,
@@ -308,8 +311,12 @@ class MainWindow(QMainWindow):
         self.folder_tree.setHeaderHidden(True)
         mark_object(self.folder_tree, "pyqFolderTree")
         self.folder_tree.currentItemChanged.connect(self._on_folder_tree_changed)
+        self.folder_tree.itemDoubleClicked.connect(self._on_folder_tree_double_clicked)
         self.folder_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.folder_tree.customContextMenuRequested.connect(self._show_folder_context_menu)
+        rename_folder_shortcut = QShortcut(QKeySequence(Qt.Key.Key_F2), self.folder_tree)
+        rename_folder_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+        rename_folder_shortcut.activated.connect(self._rename_selected_folder)
         folder_layout.addWidget(self.folder_tree)
 
         self.quota_bar = QProgressBar()
@@ -2286,6 +2293,11 @@ class MainWindow(QMainWindow):
         new_sub.triggered.connect(
             lambda _checked=False, parent=folder: self._create_folder(parent)
         )
+        if not is_protected_folder(folder):
+            rename_folder = menu.addAction("Renombrar carpeta…")
+            rename_folder.triggered.connect(
+                lambda _checked=False, f=folder: self._rename_folder(f)
+            )
         menu.addSeparator()
 
         if is_trash_folder(folder):
@@ -2405,6 +2417,103 @@ class MainWindow(QMainWindow):
     def _on_folder_delete_error(self, message: str) -> None:
         self.status_bar.showMessage("Error al eliminar carpeta")
         QMessageBox.warning(self, "Error al eliminar carpeta", message)
+
+    def _on_folder_tree_double_clicked(self, item, _column: int) -> None:
+        """Doble clic sobre una carpeta: renombrar (si no es del sistema)."""
+        if item is None:
+            return
+        folder = item.data(0, Qt.ItemDataRole.UserRole)
+        if not folder or is_protected_folder(str(folder)):
+            return
+        self._rename_folder(str(folder))
+
+    def _rename_selected_folder(self) -> None:
+        """Renombra la carpeta seleccionada (atajo F2)."""
+        folder = selected_folder_path(self.folder_tree)
+        if not folder:
+            return
+        if is_protected_folder(folder):
+            QMessageBox.warning(
+                self,
+                "Renombrar carpeta",
+                f"La carpeta «{folder}» es del sistema y no se puede renombrar.",
+            )
+            return
+        self._rename_folder(folder)
+
+    def _rename_folder(self, folder: str) -> None:
+        if not self.mail_service or not self.current_account:
+            return
+        if is_protected_folder(folder):
+            QMessageBox.warning(
+                self,
+                "Renombrar carpeta",
+                f"La carpeta «{folder}» es del sistema y no se puede renombrar.",
+            )
+            return
+        current_leaf = folder_leaf(folder)
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Renombrar carpeta",
+            f"Nuevo nombre para «{current_leaf}»:",
+            text=current_leaf,
+        )
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            QMessageBox.warning(self, "Renombrar carpeta", "Indica un nombre para la carpeta.")
+            return
+        if "/" in new_name:
+            QMessageBox.warning(
+                self,
+                "Renombrar carpeta",
+                "El nombre no puede contener «/».",
+            )
+            return
+        if new_name == current_leaf:
+            return
+        self.status_bar.showMessage(f"Renombrando carpeta «{folder}»…")
+        worker = RenameFolderWorker(
+            self.mail_service,
+            folder,
+            new_name,
+            self.mail_cache,
+            self.current_account.id,
+        )
+        worker.signals.finished.connect(self._on_folder_renamed)
+        worker.signals.error.connect(self._on_folder_rename_error)
+        worker.start()
+        self._track_worker(worker)
+
+    def _on_folder_renamed(self, payload) -> None:
+        mapping, folders = payload
+        self._folder_names = folders
+        if self.current_account:
+            self.mail_cache.save_account_folders(self.current_account.id, folders)
+        rename_map = {old: new for old, new in mapping}
+        # Traslada los contadores en memoria a las nuevas rutas.
+        for old, new in rename_map.items():
+            if old in self._folder_unread:
+                self._folder_unread[new] = self._folder_unread.pop(old)
+        new_current = rename_map.get(self._current_folder)
+        if new_current is None:
+            for old, new in rename_map.items():
+                if self._current_folder.startswith(old + "/"):
+                    new_current = new + self._current_folder[len(old):]
+                    break
+        if new_current:
+            self._current_folder = new_current
+            if self.current_account:
+                self.settings.set_last_folder(self.current_account.id, new_current)
+        self._refresh_folder_tree(select_folder=self._current_folder)
+        self._refresh_folder_unread_counts()
+        if mapping:
+            self.status_bar.showMessage(f"Carpeta renombrada: {mapping[0][1]}")
+
+    def _on_folder_rename_error(self, message: str) -> None:
+        self.status_bar.showMessage("Error al renombrar carpeta")
+        QMessageBox.warning(self, "Error al renombrar carpeta", message)
 
     def _on_background_new_mail(
         self, account_id: str, folder: str, summaries: list[MailSummary]

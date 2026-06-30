@@ -209,6 +209,18 @@ class MailCache:
                 (account_id, folder),
             )
 
+    def rename_folder(self, account_id: str, old_folder: str, new_folder: str) -> None:
+        """Actualiza la ruta de una carpeta en la caché local (mensajes y cuerpos)."""
+        if not old_folder or not new_folder or old_folder == new_folder:
+            return
+        with self._connect() as conn:
+            for table in ("messages", "message_bodies"):
+                conn.execute(
+                    f"UPDATE {table} SET folder = ? "
+                    f"WHERE account_id = ? AND folder = ?",
+                    (new_folder, account_id, old_folder),
+                )
+
     def get_cached_uids(self, account_id: str, folder: str) -> set[str]:
         with self._connect() as conn:
             rows = conn.execute(
