@@ -2180,10 +2180,13 @@ class MainWindow(QMainWindow):
                 self.mail_service = None
             self._update_connection_status("error")
             self.status_bar.showMessage("Error de conexión")
+            account_email = (
+                self.current_account.email if self.current_account else ""
+            )
             QMessageBox.critical(
                 self,
                 "Error de conexión",
-                f"No se pudo conectar:\n\n{friendly_mail_error(exc)}",
+                f"No se pudo conectar:\n\n{friendly_mail_error(exc, email=account_email)}",
             )
         finally:
             self.setEnabled(True)

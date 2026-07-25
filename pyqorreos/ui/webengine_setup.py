@@ -9,17 +9,29 @@ from __future__ import annotations
 import os
 import re
 import threading
-# Flags de Chromium para reducir el ruido en la terminal.
+# Flags de Chromium para reducir ruido y evitar abortos por GPU/OpenGL.
+# En algunos entornos (drivers, Wayland/X11, conda) ANGLE falla al crear el
+# contexto GL y Qt WebEngine termina el proceso con SIGABRT.
 _CHROMIUM_QUIET_FLAGS = (
     "--disable-logging",
     "--log-level=3",
     "--disable-speech-api",
+    "--disable-gpu",
+    "--disable-gpu-compositing",
 )
-# Avisos inofensivos de Chromium en la terminal.
+# Avisos inofensivos de Chromium/Qt en la terminal.
 _STDIO_NOISE = (
     "GBM is not supported with the current configuration",
     "Fallback to Vulkan rendering in Chromium",
     'The key "target-densitydpi" is not supported',
+    "QRhiGles2: Failed to create temporary context",
+    "QRhiGles2: Failed to create context",
+    "Failed to create RHI for backend: OpenGL",
+    "Failed to create QRhi for QBackingStoreRhiSupport",
+    "QQuickWidget: Failed to get a QRhi from the top-level widget's window",
+    "QQuickWidget::resizeEvent() no QRhi",
+    "QQuickWidget: Attempted to render scene with no rhi",
+    "GPUInfo not initialized on GpuInfoUpdate",
 )
 
 # Flag para indicar si el filtro de stderr está instalado.
@@ -95,12 +107,17 @@ def configure_webengine_environment() -> None:
     if not isinstance(sys.stderr, _FilteredStream):
         pass  # ya reemplazado por fdopen tras el filtro de descriptor
 
-    # Añade flags de Chromium para reducir el ruido en la terminal.
+    # Añade flags de Chromium para reducir el ruido y evitar SIGABRT por GPU.
     existing = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "").split()
     for flag in _CHROMIUM_QUIET_FLAGS:
         if flag not in existing:
             existing.append(flag)
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(existing).strip()
+
+    # Backend software para Qt Quick / RHI si OpenGL no está disponible.
+    # No sobrescribe un valor explícito del usuario.
+    os.environ.setdefault("QSG_RHI_BACKEND", "software")
+    os.environ.setdefault("QT_OPENGL", "software")
 
     rules = os.environ.get("QT_LOGGING_RULES", "")
     for rule in ("qt.webengine*=false", "qt.webenginecontext*=false"):

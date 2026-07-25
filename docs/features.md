@@ -10,7 +10,7 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 
 ## Cuentas y conexión
 
-- Varias cuentas de correo (Gmail, Outlook, Hotmail, MSN, Live, AOL, Yahoo, **hosting / cPanel** o servidor personalizado)
+- Varias cuentas de correo (Gmail, Outlook, Hotmail, MSN, Live, AOL, Yahoo, **GMX**, **hosting / cPanel** o servidor personalizado)
 - **Presets de proveedor** con servidores IMAP/SMTP preconfigurados; al escribir el correo en una cuenta nueva, se **detecta el preset** según el dominio (`@hotmail.*`, `@msn.com`, `@aol.*`, etc.)
 - Selector rápido de cuenta activa y gestor de cuentas (**añadir, editar, eliminar**)
 - Conexión IMAP/SMTP con **SSL/TLS** o **STARTTLS** configurable por cuenta (puertos 993/143, 465/587)
@@ -30,6 +30,7 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 | Outlook / Hotmail / MSN | `@outlook.*`, `@hotmail.*`, `@live.*`, `@msn.com` | `outlook.office365.com:993` | `smtp.office365.com:587` |
 | Yahoo | `@yahoo.*`, `@ymail.com` | `imap.mail.yahoo.com:993` | `smtp.mail.yahoo.com:587` |
 | AOL | `@aol.*` | `imap.aol.com:993` | `smtp.aol.com:587` |
+| GMX | `@gmx.*` (`.com`, `.net`, `.de`, `.es`…) | `imap.gmx.com:993` | `mail.gmx.com:587` |
 | Hosting / cPanel | dominio propio | `mail.tudominio.com:993` | `mail.tudominio.com:465/587` |
 
 ## Bandeja y sincronización

@@ -33,12 +33,14 @@ from pyqorreos.core.account import (
     AOL_APP_PASSWORD_URL,
     GMAIL_APP_PASSWORD_HELP_URL,
     GMAIL_APP_PASSWORD_URL,
+    GMX_IMAP_ENABLE_URL,
     PROVIDER_PRESETS,
     MailAccount,
     detect_provider_from_email,
     detect_provider_preset,
     is_aol_email,
     is_gmail_account,
+    is_gmx_email,
     is_microsoft_email,
 )
 from pyqorreos.core.mail_service import MailService
@@ -350,6 +352,28 @@ class AccountDialog(QDialog):
             self.password_label.setText("Contraseña de aplicación:")
             if not self.account:
                 self.password_edit.setPlaceholderText("Contraseña de aplicación AOL")
+            return
+
+        if is_gmx_email(email) or provider == "GMX":
+            self.provider_notice.setVisible(True)
+            self.provider_notice.setText(
+                "<b>Cuenta GMX</b><br>"
+                "GMX <b>desactiva IMAP/POP3 por defecto</b>. Si no lo activas, el "
+                "inicio de sesión falla aunque la contraseña sea correcta.<br>"
+                "1. Entra en el <b>webmail de GMX</b> → <b>Ajustes</b> → "
+                "<b>POP3 &amp; IMAP</b>.<br>"
+                "2. Marca <b>«Habilitar el acceso a esta cuenta mediante POP3 e "
+                "IMAP»</b> y guarda.<br>"
+                f'<a href="{GMX_IMAP_ENABLE_URL}">Guía oficial de GMX</a><br>'
+                "Nota: GMX vuelve a desactivar el acceso si no se usa durante mucho "
+                "tiempo. Servidores: IMAP <code>imap.gmx.com:993</code> (SSL), "
+                "SMTP <code>mail.gmx.com:587</code> (STARTTLS)."
+            )
+            self.password_label.setText("Contraseña:")
+            if self.account:
+                self.password_edit.setPlaceholderText("Dejar vacío para mantener la actual")
+            else:
+                self.password_edit.setPlaceholderText("")
             return
 
         if is_microsoft_email(email) or provider == "Outlook / Hotmail / MSN":

@@ -87,6 +87,14 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "use_ssl": True,
         "use_starttls": True,
     },
+    "GMX": {
+        "imap_host": "imap.gmx.com",
+        "imap_port": 993,
+        "smtp_host": "mail.gmx.com",
+        "smtp_port": 587,
+        "use_ssl": True,
+        "use_starttls": True,
+    },
     "Hosting / cPanel (Webempresa, etc.)": {
         "imap_host": "mail.tudominio.com",
         "imap_port": 993,
@@ -110,10 +118,15 @@ _MICROSOFT_IMAP_HOSTS = frozenset(
 # Servidores IMAP equivalentes al preset de AOL.
 _AOL_IMAP_HOSTS = frozenset({"imap.aol.com"})
 
+# Servidores IMAP equivalentes al preset de GMX.
+_GMX_IMAP_HOSTS = frozenset({"imap.gmx.com", "imap.gmx.net"})
+
 # URLs de ayuda para la autenticación de Gmail
 GMAIL_APP_PASSWORD_URL = "https://myaccount.google.com/apppasswords"
 GMAIL_APP_PASSWORD_HELP_URL = "https://support.google.com/accounts/answer/185833"
 AOL_APP_PASSWORD_URL = "https://login.aol.com/account/security"
+# GMX desactiva IMAP/POP3 por defecto; hay que activarlo en los ajustes web.
+GMX_IMAP_ENABLE_URL = "https://support.gmx.com/pop-imap/toggle.html"
 
 
 def _email_domain(email: str) -> str:
@@ -138,6 +151,12 @@ def is_aol_email(email: str) -> bool:
     return bool(domain) and domain.startswith("aol.")
 
 
+def is_gmx_email(email: str) -> bool:
+    """True para dominios de GMX (@gmx.com, @gmx.net, @gmx.de, @gmx.es…)."""
+    domain = _email_domain(email)
+    return bool(domain) and (domain == "gmx.com" or domain.startswith("gmx."))
+
+
 def detect_provider_from_email(email: str) -> str | None:
     """Sugiere un preset según el dominio del correo (@hotmail, @msn, @aol, etc.)."""
     domain = _email_domain(email)
@@ -151,6 +170,8 @@ def detect_provider_from_email(email: str) -> str | None:
         return "Yahoo"
     if is_aol_email(email):
         return "AOL"
+    if is_gmx_email(email):
+        return "GMX"
     return None
 
 
@@ -167,6 +188,8 @@ def detect_provider_preset(account: MailAccount) -> str:
         return "Outlook / Hotmail / MSN"
     if imap in _AOL_IMAP_HOSTS:
         return "AOL"
+    if imap in _GMX_IMAP_HOSTS:
+        return "GMX"
     if imap.startswith("mail.") or imap.startswith("imap."):
         return "Hosting / cPanel (Webempresa, etc.)"
     for name, preset in PROVIDER_PRESETS.items():

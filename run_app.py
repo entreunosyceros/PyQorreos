@@ -163,18 +163,16 @@ def main() -> int:
             traceback.print_exc()
             return 1
 
-    from pyqorreos.ui.webengine_setup import configure_webengine_environment
-
-    configure_webengine_environment()
+    # No configurar WebEngine aquí: redirige stderr a un pipe y, tras os.execv,
+    # el hilo lector desaparece (stderr huérfano + posibles abortos silenciosos).
+    # configure_webengine_environment() se llama en launch_app() dentro del venv.
 
     try:
         venv_python = ensure_venv()
         install_dependencies(venv_python)
 
-        print("Iniciando PyQorreos …")
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(PROJECT_DIR)
-        os.environ.update(env)
+        print("Iniciando PyQorreos …", flush=True)
+        os.environ["PYTHONPATH"] = str(PROJECT_DIR)
         argv = [str(venv_python), str(__file__), *sys.argv[1:]]
         # Reemplaza este proceso por el Python del venv (sin proceso padre bloqueando
         # la terminal en subprocess.run tras cerrar la aplicación).

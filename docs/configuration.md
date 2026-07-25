@@ -36,6 +36,7 @@ Opciones habituales:
 3. Elegir un **servidor VPN en tu país** (menos fiable que las dos anteriores).
 4. Cuentas **Gmail, AOL o hosting propio** suelen ser menos estrictas con VPN; MSN/Outlook es el caso más habitual.
 - Para **AOL** (`@aol.*`): preset **AOL** (`imap.aol.com` / `smtp.aol.com`); suele requerir [contraseña de aplicación](https://login.aol.com/account/security).
+- Para **GMX** (`@gmx.com`, `@gmx.net`, `@gmx.de`, `@gmx.es`…): preset **GMX** (`imap.gmx.com:993` SSL / `mail.gmx.com:587` STARTTLS). **Importante:** GMX trae **IMAP/POP3 desactivado por defecto**; debes activarlo en el webmail (**Ajustes → POP3 & IMAP → «Habilitar el acceso a esta cuenta mediante POP3 e IMAP» → Guardar**) o el inicio de sesión fallará aunque la contraseña sea correcta. GMX puede volver a desactivarlo tras un periodo largo sin usarlo. [Guía oficial](https://support.gmx.com/pop-imap/toggle.html).
 - Para **Yahoo**: preset Yahoo; contraseña de aplicación habitual en cuentas con 2FA.
 - Para **hosting / cPanel** (Webempresa, Raiola, etc.): preset **Hosting / cPanel**. Suele ser `mail.tudominio.com`, usuario = correo completo, IMAP **993 SSL/TLS**, SMTP **465 SSL** o **587 STARTTLS**. Usa **Probar conexión** antes de guardar.
 - En Linux, el llavero usa Secret Service (GNOME Keyring, KWallet, etc.).

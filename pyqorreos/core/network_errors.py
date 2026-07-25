@@ -33,6 +33,49 @@ def _smtp_exception_detail(exc: BaseException) -> str:
     return str(exc).strip()
 
 
+def _auth_failed_message(email: str = "") -> str:
+    """Mensaje de credenciales inválidas, adaptado al proveedor si se conoce."""
+    from pyqorreos.core.account import (
+        is_aol_email,
+        is_gmail_account,
+        is_gmx_email,
+        is_microsoft_email,
+    )
+
+    addr = (email or "").strip()
+    if addr:
+        if is_gmx_email(addr):
+            return (
+                "Usuario o contraseña incorrectos en GMX. "
+                "Recuerda que GMX trae IMAP/POP3 DESACTIVADO por defecto: actívalo en "
+                "el webmail (Ajustes → POP3 & IMAP → «Habilitar el acceso a esta cuenta "
+                "mediante POP3 e IMAP») y usa tu correo completo como usuario."
+            )
+        if is_gmail_account(email=addr):
+            return (
+                "Usuario o contraseña incorrectos en Gmail. "
+                "Usa una contraseña de aplicación de 16 caracteres (con verificación en "
+                "2 pasos) o autentícate con OAuth2, no la contraseña normal de la cuenta."
+            )
+        if is_microsoft_email(addr):
+            return (
+                "Usuario o contraseña incorrectos en Outlook/Hotmail/MSN. "
+                "Usa OAuth2 (recomendado) o una contraseña de aplicación si tienes "
+                "verificación en dos pasos; el usuario es tu correo completo."
+            )
+        if is_aol_email(addr):
+            return (
+                "Usuario o contraseña incorrectos en AOL. "
+                "AOL exige una contraseña de aplicación para clientes externos, no la "
+                "contraseña de la web."
+            )
+    return (
+        "Usuario o contraseña incorrectos. "
+        "En Gmail y Outlook usa una contraseña de aplicación, no la de la cuenta. "
+        "En GMX, activa primero el acceso IMAP/POP3 en los ajustes del webmail."
+    )
+
+
 def _microsoft_country_block_message() -> str:
     return (
         "Microsoft (Outlook, Hotmail, MSN) ha rechazado el envío desde tu red actual "
@@ -44,8 +87,12 @@ def _microsoft_country_block_message() -> str:
     )
 
 
-def friendly_mail_error(exc: BaseException) -> str:
-    """Convierte excepciones de red/IMAP/SMTP en texto útil para el usuario."""
+def friendly_mail_error(exc: BaseException, *, email: str = "") -> str:
+    """Convierte excepciones de red/IMAP/SMTP en texto útil para el usuario.
+
+    Si se indica ``email``, el mensaje de credenciales inválidas se adapta al
+    proveedor (Gmail/Outlook → contraseña de aplicación; GMX → activar IMAP…).
+    """
     detail = _smtp_exception_detail(exc)
     raw = detail or str(exc).strip()
     lowered = raw.lower()
@@ -61,10 +108,7 @@ def friendly_mail_error(exc: BaseException) -> str:
                 "authenticate",
             )
         ):
-            return (
-                "Usuario o contraseña incorrectos. "
-                "En Gmail y Outlook usa una contraseña de aplicación, no la de la cuenta."
-            )
+            return _auth_failed_message(email)
         if "select" in lowered and "no such mailbox" in lowered:
             return "La carpeta no existe en el servidor."
         if "timeout" in lowered:
@@ -73,10 +117,13 @@ def friendly_mail_error(exc: BaseException) -> str:
 
     # Error de autenticación SMTP.
     if isinstance(exc, smtplib.SMTPAuthenticationError):
-        return (
+        base = (
             "No se pudo autenticar en SMTP. "
             "Revisa usuario, contraseña y el puerto de envío (465 SSL o 587 STARTTLS)."
         )
+        if email:
+            return f"{base}\n\n{_auth_failed_message(email)}"
+        return base
 
     if "country not allowed" in lowered:
         return _microsoft_country_block_message()

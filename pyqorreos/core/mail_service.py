@@ -1607,7 +1607,7 @@ class MailService:
                     self._smtp_login(server)
             return True, "SMTP correcto"
         except Exception as exc:
-            return False, friendly_mail_error(exc)
+            return False, friendly_mail_error(exc, email=self.account.email)
 
     def test_connection(self) -> tuple[bool, str]:
         try:
@@ -1615,7 +1615,7 @@ class MailService:
             self.list_folders()
             self.disconnect()
         except Exception as exc:
-            return False, f"IMAP: {friendly_mail_error(exc)}"
+            return False, f"IMAP: {friendly_mail_error(exc, email=self.account.email)}"
         smtp_ok, smtp_msg = self.test_smtp()
         if not smtp_ok:
             return False, f"IMAP correcto, pero SMTP falló: {smtp_msg}"
