@@ -43,7 +43,8 @@ from pyqorreos.core.reply_utils import ComposeDraft
 from pyqorreos.core.user_preferences import DEFAULT_COMPOSE_SNIPPETS
 from pyqorreos.ui.rich_compose_editor import RichComposeEditor
 from pyqorreos.ui.address_book_dialog import AddressBookDialog
-from pyqorreos.ui.theme import mark_role, resolve_theme_from_parent
+from pyqorreos.ui.action_icons import action_icon
+from pyqorreos.ui.theme import mark_object, mark_role, resolve_theme_from_parent
 from pyqorreos.ui.workers import (
     DeleteMessagesWorker,
     SaveDraftWorker,
@@ -81,6 +82,8 @@ class ComposeDialog(QDialog):
         self._folder_names = folder_names or []
         self._address_book = address_book
         self._openpgp_enabled = openpgp_enabled and openpgp_available()
+        self._openpgp_sign_default = openpgp_sign_default
+        self._openpgp_encrypt_default = openpgp_encrypt_default
         self._openpgp_settings = (
             openpgp_settings
             if isinstance(openpgp_settings, OpenPgpSettings)
@@ -121,29 +124,50 @@ class ComposeDialog(QDialog):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 12)
+        layout.setSpacing(10)
+
+        header = QWidget()
+        mark_object(header, "pyqComposeHeader")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(12, 10, 12, 10)
+        header_layout.setSpacing(7)
         form = QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(7)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.to_edit = QLineEdit()
         self.to_edit.setPlaceholderText("destinatario@ejemplo.com")
+        self.to_edit.setAccessibleName("Destinatarios")
         form.addRow("Para:", self._address_field_row(self.to_edit))
 
         self.cc_edit = QLineEdit()
         self.cc_edit.setPlaceholderText("copia@ejemplo.com (opcional)")
+        self.cc_edit.setAccessibleName("Destinatarios en copia")
         form.addRow("CC:", self._address_field_row(self.cc_edit))
 
         self.bcc_edit = QLineEdit()
         self.bcc_edit.setPlaceholderText("copia.oculta@ejemplo.com (opcional)")
+        self.bcc_edit.setAccessibleName("Destinatarios en copia oculta")
         form.addRow("CCO:", self._address_field_row(self.bcc_edit))
 
         self.subject_edit = QLineEdit()
         self.subject_edit.setPlaceholderText("Escribe el asunto del correo")
+        self.subject_edit.setAccessibleName("Asunto")
         form.addRow("Asunto:", self.subject_edit)
 
-        layout.addLayout(form)
+        header_layout.addLayout(form)
+        layout.addWidget(header)
         if self._address_book is not None:
             self._setup_address_completers()
 
+        options = QWidget()
+        mark_object(options, "pyqComposeOptions")
         snippet_row = QHBoxLayout()
+        snippet_row.setContentsMargins(10, 6, 10, 6)
+        snippet_row.setSpacing(8)
         snippet_row.addWidget(QLabel("Plantilla:"))
         self.snippet_combo = QComboBox()
         self.snippet_combo.addItem("— Insertar plantilla —", None)
@@ -151,29 +175,48 @@ class ComposeDialog(QDialog):
             self.snippet_combo.addItem(snippet.get("name", "Plantilla"))
         self.snippet_combo.activated.connect(self._insert_snippet)
         snippet_row.addWidget(self.snippet_combo, 1)
-        layout.addLayout(snippet_row)
+        options.setLayout(snippet_row)
+        layout.addWidget(options)
 
-        layout.addWidget(QLabel("Mensaje:"))
+        message_label = QLabel("Mensaje")
+        mark_role(message_label, "section-title")
+        layout.addWidget(message_label)
         self.body_editor = RichComposeEditor(theme=self._theme)
-        layout.addWidget(self.body_editor)
+        self.body_editor.setAccessibleName("Editor del mensaje")
+        layout.addWidget(self.body_editor, 1)
 
+        attachments = QWidget()
+        mark_object(attachments, "pyqComposeAttachments")
+        attachments_layout = QVBoxLayout(attachments)
+        attachments_layout.setContentsMargins(10, 7, 10, 7)
+        attachments_layout.setSpacing(6)
         attach_row = QHBoxLayout()
         attach_row.addWidget(QLabel("Adjuntos:"))
-        self.attach_btn = QPushButton("📎 Añadir archivos…")
+        self.attach_btn = QPushButton("Añadir archivos…")
+        self.attach_btn.setIcon(action_icon("attachment"))
         mark_role(self.attach_btn, "default")
         self.attach_btn.clicked.connect(self._add_attachments)
         self.remove_attach_btn = QPushButton("Quitar seleccionado")
+        self.remove_attach_btn.setIcon(action_icon("delete"))
         mark_role(self.remove_attach_btn, "default")
         self.remove_attach_btn.clicked.connect(self._remove_attachment)
+        self.remove_attach_btn.setEnabled(False)
         attach_row.addWidget(self.attach_btn)
         attach_row.addWidget(self.remove_attach_btn)
         attach_row.addStretch()
-        layout.addLayout(attach_row)
+        attachments_layout.addLayout(attach_row)
 
         self.attach_list = QListWidget()
         self.attach_list.setMaximumHeight(72)
-        layout.addWidget(self.attach_list)
+        self.attach_list.setAccessibleName("Archivos adjuntos")
+        self.attach_list.itemSelectionChanged.connect(
+            lambda: self.remove_attach_btn.setEnabled(self.attach_list.currentRow() >= 0)
+        )
+        attachments_layout.addWidget(self.attach_list)
+        layout.addWidget(attachments)
 
+        security_row = QHBoxLayout()
+        security_row.setSpacing(14)
         self.read_receipt_check = QCheckBox("Solicitar acuse de recibo")
         self.read_receipt_check.setChecked(self._request_read_receipt_default)
         receipt_tip = (
@@ -186,24 +229,28 @@ class ComposeDialog(QDialog):
                 "(error «country not allowed»), no a esta casilla."
             )
         self.read_receipt_check.setToolTip(receipt_tip)
-        layout.addWidget(self.read_receipt_check)
+        security_row.addWidget(self.read_receipt_check)
 
         if self._openpgp_enabled:
-            pgp_row = QHBoxLayout()
             self.openpgp_sign_check = QCheckBox("Firmar (OpenPGP)")
-            self.openpgp_sign_check.setChecked(openpgp_sign_default)
+            self.openpgp_sign_check.setChecked(self._openpgp_sign_default)
             self.openpgp_encrypt_check = QCheckBox("Cifrar (OpenPGP)")
-            self.openpgp_encrypt_check.setChecked(openpgp_encrypt_default)
-            pgp_row.addWidget(self.openpgp_sign_check)
-            pgp_row.addWidget(self.openpgp_encrypt_check)
-            pgp_row.addStretch()
-            layout.addLayout(pgp_row)
+            self.openpgp_encrypt_check.setChecked(self._openpgp_encrypt_default)
+            security_row.addWidget(self.openpgp_sign_check)
+            security_row.addWidget(self.openpgp_encrypt_check)
         else:
             self.openpgp_sign_check = None
             self.openpgp_encrypt_check = None
+        security_row.addStretch()
+        layout.addLayout(security_row)
 
+        footer = QWidget()
+        mark_object(footer, "pyqComposeFooter")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(8, 8, 8, 0)
         buttons = QDialogButtonBox()
         self.draft_btn = QPushButton("Guardar borrador")
+        self.draft_btn.setIcon(action_icon("drafts"))
         mark_role(self.draft_btn, "default")
         self.draft_btn.clicked.connect(self._save_draft)
         if not self._drafts_folder:
@@ -215,13 +262,15 @@ class ComposeDialog(QDialog):
         ok_btn = buttons.button(QDialogButtonBox.StandardButton.Ok)
         if ok_btn:
             ok_btn.setText("Enviar")
+            ok_btn.setIcon(action_icon("sent"))
             mark_role(ok_btn, "primary")
         cancel_btn = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         if cancel_btn:
             mark_role(cancel_btn, "default")
         buttons.accepted.connect(self._send)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        footer_layout.addWidget(buttons)
+        layout.addWidget(footer)
 
     def _address_field_row(self, edit: QLineEdit) -> QWidget:
         row = QWidget()
@@ -230,6 +279,7 @@ class ComposeDialog(QDialog):
         layout.addWidget(edit, 1)
         if self._address_book is not None:
             btn = QPushButton("Agenda…")
+            btn.setIcon(action_icon("users"))
             mark_role(btn, "default")
             btn.setToolTip("Elegir un contacto de la agenda")
             btn.clicked.connect(lambda _checked=False, field=edit: self._pick_from_agenda(field))
@@ -315,6 +365,7 @@ class ComposeDialog(QDialog):
                 continue
             self._attachments.append(attachment)
             self.attach_list.addItem(QListWidgetItem(attachment.filename))
+        self.remove_attach_btn.setEnabled(self.attach_list.currentRow() >= 0)
 
     def _remove_attachment(self) -> None:
         row = self.attach_list.currentRow()
@@ -322,6 +373,7 @@ class ComposeDialog(QDialog):
             return
         self.attach_list.takeItem(row)
         del self._attachments[row]
+        self.remove_attach_btn.setEnabled(self.attach_list.currentRow() >= 0)
 
     def _build_draft_raw(self) -> bytes | None:
         """Construye el borrador en bytes; devuelve None si no hay contenido."""

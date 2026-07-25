@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.core.link_safety import is_suspicious_link, url_from_loose_text
+from pyqorreos.ui.action_icons import action_icon
 from pyqorreos.ui.theme import apply_message_viewer_theme, mark_object, mark_role
 
 try:
@@ -76,19 +77,25 @@ class MessageViewer(QWidget):
         toolbar = QHBoxLayout(self._toolbar)
         toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.setSpacing(6)
-        self._btn_load_images = QPushButton("🖼 Mostrar imágenes remotas")
+        self._btn_load_images = QPushButton("Mostrar imágenes remotas")
+        self._btn_load_images.setIcon(action_icon("image"))
+        self._btn_load_images.setAccessibleName("Mostrar imágenes remotas")
         self._btn_load_images.setToolTip("Mostrar imágenes remotas del mensaje")
         self._btn_load_images.setVisible(False)
         self._btn_load_images.clicked.connect(self.load_remote_images_requested.emit)
         toolbar.addWidget(self._btn_load_images)
 
-        self._btn_view_mode = QPushButton("📄 Modo lectura")
+        self._btn_view_mode = QPushButton("Modo lectura")
+        self._btn_view_mode.setIcon(action_icon("reading-mode"))
+        self._btn_view_mode.setAccessibleName("Cambiar modo de lectura")
         self._btn_view_mode.setToolTip("Alternar entre HTML, modo lectura y texto plano")
         self._btn_view_mode.setVisible(False)
         self._btn_view_mode.clicked.connect(self._toggle_view_mode)
         toolbar.addWidget(self._btn_view_mode)
 
-        self._btn_translate = QPushButton("🌐 Traducir")
+        self._btn_translate = QPushButton("Traducir")
+        self._btn_translate.setIcon(action_icon("translate"))
+        self._btn_translate.setAccessibleName("Traducir mensaje")
         self._btn_translate.setVisible(False)
         self._btn_translate.setToolTip(
             "Traducir el mensaje al idioma configurado en Preferencias"
@@ -198,9 +205,9 @@ class MessageViewer(QWidget):
             return
         self._compact_toolbar = compact
         self._btn_load_images.setText(
-            "🖼 Imágenes" if compact else "🖼 Mostrar imágenes remotas"
+            "Imágenes" if compact else "Mostrar imágenes remotas"
         )
-        self._btn_view_mode.setText("📄 Lectura" if compact else "📄 Modo lectura")
+        self._btn_view_mode.setText("Lectura" if compact else "Modo lectura")
 
     def sync_toolbar_strip(self) -> None:
         pass
@@ -328,7 +335,8 @@ class MessageViewer(QWidget):
 
         self._clear_link_hover()
         self._showing_translation = True
-        self._btn_translate.setText("↩ Ver original")
+        self._btn_translate.setText("Ver original")
+        self._btn_translate.setIcon(action_icon("reply"))
         self._btn_translate.setVisible(True)
         self._btn_view_mode.setVisible(False)
         self._btn_load_images.setVisible(False)
@@ -365,11 +373,12 @@ class MessageViewer(QWidget):
     def restore_from_stored(self) -> None:
         """Vuelve al contenido original del mensaje."""
         self._showing_translation = False
-        self._btn_translate.setText("🌐 Traducir")
+        self._btn_translate.setText("Traducir")
+        self._btn_translate.setIcon(action_icon("translate"))
         self._clear_link_hover()
         if self._stored_html.strip():
             self._view_mode = "html"
-            self._btn_view_mode.setText("📄 Modo lectura")
+            self._btn_view_mode.setText("Modo lectura")
             self._btn_view_mode.setVisible(True)
             self._btn_load_images.setVisible(self._remote_blocked)
             self._render_current()
@@ -409,7 +418,8 @@ class MessageViewer(QWidget):
 
     def _reset_translation_state(self) -> None:
         self._showing_translation = False
-        self._btn_translate.setText("🌐 Traducir")
+        self._btn_translate.setText("Traducir")
+        self._btn_translate.setIcon(action_icon("translate"))
 
     def _toggle_view_mode(self) -> None:
         if self._showing_translation:
@@ -423,11 +433,11 @@ class MessageViewer(QWidget):
             self._render_current()
         elif self._view_mode == "reading":
             self._view_mode = "plain"
-            self._btn_view_mode.setText("🌐 HTML original")
+            self._btn_view_mode.setText("HTML original")
             self._render_current()
         else:
             self._view_mode = "html"
-            self._btn_view_mode.setText("📄 Modo lectura")
+            self._btn_view_mode.setText("Modo lectura")
             self._render_current()
 
     def _render_current(self) -> None:
@@ -516,7 +526,7 @@ class MessageViewer(QWidget):
         self._stored_base_url = base_url
         self._remote_blocked = remote_blocked
         self._view_mode = "html"
-        self._btn_view_mode.setText("📄 Modo lectura")
+        self._btn_view_mode.setText("Modo lectura")
         self._btn_view_mode.setVisible(True)
         self._btn_load_images.setVisible(remote_blocked)
         self._btn_translate.setVisible(True)

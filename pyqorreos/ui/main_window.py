@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QSignalBlocker, QThread, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, QSignalBlocker, QThread, QTimer
 from PySide6.QtGui import QAction, QBrush, QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -48,11 +48,11 @@ from pyqorreos.core.classifier import MailCategory, extract_email_address
 from pyqorreos.core.compose_utils import format_bytes
 from pyqorreos.core.folder_utils import (
     can_delete_folder,
+    detect_folder_delimiter,
     find_archive_folder,
     find_drafts_folder,
     find_trash_folder,
     folder_descendants,
-    folder_leaf,
     is_drafts_folder,
     is_protected_folder,
     is_trash_folder,
@@ -80,7 +80,14 @@ from pyqorreos.ui.action_icons import action_icon, apply_action_icon
 from pyqorreos.ui.attachment_panel import AttachmentPanel
 from pyqorreos.ui.background_sync import BackgroundSyncManager
 from pyqorreos.ui.compose_dialog import ComposeDialog
-from pyqorreos.ui.folder_tree_widget import populate_folder_tree, selected_folder_path
+from pyqorreos.ui.folder_tree_widget import (
+    AccountFolders,
+    current_expansion,
+    item_account_id,
+    item_folder_path,
+    populate_accounts_tree,
+    selected_folder_path,
+)
 from pyqorreos.ui.message_viewer import MessageViewer
 from pyqorreos.ui.notification_utils import format_new_mail_notification
 from pyqorreos.ui.openpgp_keys_dialog import OpenPgpKeysDialog
@@ -125,6 +132,9 @@ from pyqorreos.ui.workers import (
 # Tamaño por defecto; se sobreescribe con preferencias del usuario.
 DEFAULT_PAGE_SIZE = 50
 TABLE_FONT_SIZE = 10
+# La resolución DNS no respeta el timeout del socket IMAP, así que avisamos
+# al usuario si el servidor no ha respondido en este tiempo.
+SLOW_CONNECTION_HINT_MS = 8000
 
 
 def _font_bold(base: QFont | None = None, point_size: int = TABLE_FONT_SIZE) -> QFont:
@@ -224,11 +234,18 @@ class MainWindow(QMainWindow):
         self._ui_compact = False
         self._ui_narrow = False
         self._manual_refresh_active = False
+        self._pending_manual_refresh = False
+        self._last_filtered_total = 0
         self._reader_label_mode = ""
         self._connection_status = "offline"
         self._thread_counts: dict[str, int] = {}
         self._tray_notification: dict[str, str] | None = None
         self._pending_nav: tuple[str, str, str | None] | None = None
+        self._startup_connection_pending_account_id: str | None = None
+        # Carpetas y totales en caché de las cuentas no activas, para pintarlas
+        # en el árbol sin consultar SQLite en cada repintado.
+        self._other_account_folders: dict[str, tuple[list[str], dict[str, int]]] = {}
+        self._pending_folder_rename: tuple[str, str] | None = None
 
         self.setWindowTitle("PyQorreos")
         self.setMinimumSize(720, 580)
@@ -252,12 +269,18 @@ class MainWindow(QMainWindow):
                 (a for a in self.accounts if a.id == last_id),
                 self.accounts[0],
             )
-            self._begin_startup(account)
+            self.subject_label.setText("Cargando correo guardado…")
+            self.message_viewer.show_plain(
+                "PyQorreos está preparando tus carpetas y mensajes guardados."
+            )
+            # Da tiempo a Qt para mostrar y pintar la ventana completa. La caché
+            # se carga después y la red solo se inicia cuando esa carga termina.
+            QTimer.singleShot(150, lambda a=account: self._begin_startup(a))
         else:
             self._show_welcome()
 
     def _begin_startup(self, account: MailAccount) -> None:
-        """Muestra la caché local al instante y arranca la descarga de correo nuevo."""
+        """Muestra primero la caché local; la conexión se inicia al terminar."""
         self.current_account = account
         self.settings.set_last_account_id(account.id)
         self._refresh_account_combo(account.id)
@@ -266,24 +289,30 @@ class MainWindow(QMainWindow):
         self.sort_combo.setCurrentIndex(0)
         self.sort_combo.blockSignals(False)
         self._current_page = 0
-        last_folder = self.settings.get_last_folder(account.id) or "INBOX"
-        self._current_folder = last_folder
         self._preload_cached_folders(account.id)
+        last_folder = self.settings.get_last_folder(account.id) or "INBOX"
+        # Si la última carpeta no tiene caché pero INBOX sí, prioriza contenido
+        # visible durante el arranque y evita una ventana aparentemente vacía.
+        if (
+            last_folder != "INBOX"
+            and self.mail_cache.folder_count(account.id, last_folder) <= 0
+            and self.mail_cache.folder_count(account.id, "INBOX") > 0
+        ):
+            last_folder = "INBOX"
+        self._current_folder = last_folder
+        self._refresh_folder_tree(select_folder=last_folder)
+        self._startup_connection_pending_account_id = account.id
+        self.status_bar.showMessage(
+            f"Cargando correo guardado de {account.email}…"
+        )
         self._preload_cached_folder(account.id, last_folder)
-        self._background_sync.set_accounts(self.accounts, account.id)
-        if self._prefs.background_sync_enabled:
-            # Otras cuentas: INBOX en paralelo; la activa se sincroniza al conectar.
-            self._background_sync.sync_all_accounts_now(
-                exclude_account_id=account.id
-            )
-        self.status_bar.showMessage(f"Conectando a {account.email} y buscando correo nuevo…")
-        self._connect_account(account, block_ui=False)
 
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         layout = QHBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(8, 8, 8, 6)
+        layout.setSpacing(0)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -292,15 +321,21 @@ class MainWindow(QMainWindow):
         mark_object(self._folder_panel, "pyqFolderPanel")
         folder_panel = self._folder_panel
         folder_layout = QVBoxLayout(folder_panel)
-        folder_layout.setContentsMargins(8, 8, 4, 8)
+        folder_layout.setContentsMargins(10, 10, 10, 10)
+        folder_layout.setSpacing(8)
         folder_label = QLabel("Carpetas")
         folder_label.setFont(_font_bold(folder_label.font(), 11))
+        mark_role(folder_label, "section-title")
         folder_layout.addWidget(folder_label)
 
-        self.btn_new_folder = QPushButton("＋ Carpeta")
+        self.btn_new_folder = QPushButton("Carpeta")
+        self.btn_new_folder.setIcon(action_icon("folder-add"))
+        self.btn_new_folder.setAccessibleName("Crear carpeta")
         self.btn_new_folder.setToolTip("Crear una carpeta nueva en el servidor")
         self.btn_new_folder.clicked.connect(lambda: self._create_folder())
-        self.btn_new_subfolder = QPushButton("＋ Subcarpeta")
+        self.btn_new_subfolder = QPushButton("Subcarpeta")
+        self.btn_new_subfolder.setIcon(action_icon("folder-add"))
+        self.btn_new_subfolder.setAccessibleName("Crear subcarpeta")
         self.btn_new_subfolder.setToolTip(
             "Crear una subcarpeta dentro de la carpeta seleccionada"
         )
@@ -313,6 +348,8 @@ class MainWindow(QMainWindow):
 
         self.folder_tree = QTreeWidget()
         self.folder_tree.setHeaderHidden(True)
+        self.folder_tree.setUniformRowHeights(True)
+        self.folder_tree.setAccessibleName("Carpetas de correo")
         mark_object(self.folder_tree, "pyqFolderTree")
         self.folder_tree.currentItemChanged.connect(self._on_folder_tree_changed)
         self.folder_tree.itemDoubleClicked.connect(self._on_folder_tree_double_clicked)
@@ -343,27 +380,35 @@ class MainWindow(QMainWindow):
         mark_object(self._message_panel, "pyqMailPanel")
         message_panel = self._message_panel
         message_layout = QVBoxLayout(message_panel)
-        message_layout.setContentsMargins(4, 8, 4, 8)
+        message_layout.setContentsMargins(10, 10, 10, 10)
+        message_layout.setSpacing(8)
 
         account_row = QHBoxLayout()
-        account_row.addWidget(QLabel("Cuenta:"))
+        account_caption = QLabel("Cuenta")
+        mark_role(account_caption, "meta")
+        account_row.addWidget(account_caption)
         self.account_combo = QComboBox()
         self.account_combo.setMinimumWidth(100)
         self.account_combo.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
         self.account_combo.currentIndexChanged.connect(self._on_account_combo_changed)
+        self.account_combo.setAccessibleName("Cuenta activa")
         account_row.addWidget(self.account_combo, 1)
         self.btn_manage_accounts = QPushButton("Gestionar…")
+        self.btn_manage_accounts.setIcon(action_icon("users"))
         self.btn_manage_accounts.clicked.connect(self._manage_accounts)
         account_row.addWidget(self.btn_manage_accounts)
         self.btn_edit_account = QPushButton("Editar…")
+        self.btn_edit_account.setIcon(action_icon("edit"))
         self.btn_edit_account.setToolTip("Editar la cuenta seleccionada")
         self.btn_edit_account.clicked.connect(self._edit_current_account)
         account_row.addWidget(self.btn_edit_account)
 
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Asunto o remitente…")
+        self.search_edit.setPlaceholderText("Buscar correo por asunto o remitente…")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setAccessibleName("Buscar correo")
         self.search_edit.setMinimumWidth(80)
         self.search_edit.textChanged.connect(lambda _text: self._search_timer.start())
         self.search_body_check = QCheckBox("En el cuerpo")
@@ -397,16 +442,40 @@ class MainWindow(QMainWindow):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
         header_layout.addLayout(account_row)
+
+        self._connection_banner = QWidget()
+        mark_role(self._connection_banner, "connection-banner")
+        banner_layout = QHBoxLayout(self._connection_banner)
+        banner_layout.setContentsMargins(9, 7, 7, 7)
+        banner_layout.setSpacing(7)
+        self._connection_banner_label = QLabel()
+        self._connection_banner_label.setWordWrap(True)
+        self._connection_banner_label.setAccessibleName("Aviso de conexión")
+        banner_layout.addWidget(self._connection_banner_label, 1)
+        self._connection_retry_btn = QPushButton("Reintentar")
+        self._connection_retry_btn.setIcon(action_icon("refresh"))
+        self._connection_retry_btn.clicked.connect(self._retry_current_account)
+        banner_layout.addWidget(self._connection_retry_btn)
+        self._connection_edit_btn = QPushButton("Editar cuenta")
+        self._connection_edit_btn.setIcon(action_icon("edit"))
+        self._connection_edit_btn.clicked.connect(self._edit_current_account)
+        banner_layout.addWidget(self._connection_edit_btn)
+        self._connection_banner.hide()
+        header_layout.addWidget(self._connection_banner)
+
         filter_row1 = QHBoxLayout()
-        filter_row1.addWidget(QLabel("Buscar:"))
         filter_row1.addWidget(self.search_edit, 1)
         filter_row1.addWidget(self.search_body_check)
         filter_row1.addWidget(self.unread_only_check)
         filter_row2 = QHBoxLayout()
-        filter_row2.addWidget(QLabel("Filtrar:"))
+        filter_caption = QLabel("Filtros")
+        mark_role(filter_caption, "meta")
+        filter_row2.addWidget(filter_caption)
         filter_row2.addWidget(self.category_filter)
         filter_row2.addWidget(self.flag_filter_check)
-        filter_row2.addWidget(QLabel("Orden:"))
+        order_caption = QLabel("Orden")
+        mark_role(order_caption, "meta")
+        filter_row2.addWidget(order_caption)
         filter_row2.addWidget(self.sort_combo, 1)
         header_layout.addLayout(filter_row1)
         header_layout.addLayout(filter_row2)
@@ -431,6 +500,9 @@ class MainWindow(QMainWindow):
         )
         self.message_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.message_table.setAlternatingRowColors(False)
+        self.message_table.setWordWrap(False)
+        self.message_table.verticalHeader().setDefaultSectionSize(36)
+        self.message_table.setAccessibleName("Lista de mensajes")
         mark_object(self.message_table, "pyqMessageTable")
         self.message_table.viewport().setAutoFillBackground(True)
         self.message_table.verticalHeader().setVisible(False)
@@ -466,13 +538,17 @@ class MainWindow(QMainWindow):
         message_layout.addWidget(self.message_table, 1)
 
         # Paginación (50 correos por página)
-        self.btn_delete_selected = QPushButton("🗑 Eliminar")
+        self.btn_delete_selected = QPushButton("Eliminar")
+        self.btn_delete_selected.setIcon(action_icon("delete"))
+        self.btn_delete_selected.setAccessibleName("Eliminar mensajes seleccionados")
         self.btn_delete_selected.setToolTip(
             "Eliminar los mensajes seleccionados (Supr)"
         )
         self.btn_delete_selected.clicked.connect(self._act_delete.trigger)
         self.btn_delete_selected.setEnabled(False)
-        self.btn_move_selected = QPushButton("📁 Mover a…")
+        self.btn_move_selected = QPushButton("Mover a…")
+        self.btn_move_selected.setIcon(action_icon("move"))
+        self.btn_move_selected.setAccessibleName("Mover mensajes seleccionados")
         self.btn_move_selected.setToolTip("Mover los mensajes seleccionados a otra carpeta")
         self.btn_move_selected.clicked.connect(self._show_move_messages_dialog)
         self.btn_move_selected.setEnabled(False)
@@ -489,10 +565,12 @@ class MainWindow(QMainWindow):
         pagination_row.addWidget(self.btn_delete_selected)
         pagination_row.addWidget(self.btn_move_selected)
         pagination_row.addSpacing(12)
-        self.btn_prev_page = QPushButton("◀ Anterior")
+        self.btn_prev_page = QPushButton("Anterior")
+        self.btn_prev_page.setIcon(action_icon("chevron-left"))
         self.btn_prev_page.clicked.connect(self._prev_page)
         self.page_label = QLabel("Página 1 de 1")
-        self.btn_next_page = QPushButton("Siguiente ▶")
+        self.btn_next_page = QPushButton("Siguiente")
+        self.btn_next_page.setIcon(action_icon("chevron-right"))
         self.btn_next_page.clicked.connect(self._next_page)
         self.btn_cancel_sync = QPushButton("Cancelar sincronización")
         self.btn_cancel_sync.clicked.connect(self._cancel_sync)
@@ -522,9 +600,12 @@ class MainWindow(QMainWindow):
         mark_object(self._reader_panel, "pyqReaderPanel")
         reader_panel = self._reader_panel
         reader_layout = QVBoxLayout(reader_panel)
-        reader_layout.setContentsMargins(4, 8, 8, 8)
+        reader_layout.setContentsMargins(12, 10, 12, 12)
+        reader_layout.setSpacing(7)
         self.subject_label = QLabel("Selecciona un mensaje")
         self.subject_label.setFont(_font_bold(self.subject_label.font(), 13))
+        mark_role(self.subject_label, "section-title")
+        self.subject_label.setAccessibleName("Asunto del mensaje")
         self.subject_label.setWordWrap(True)
         reader_layout.addWidget(self.subject_label)
 
@@ -595,18 +676,16 @@ class MainWindow(QMainWindow):
             "syncing": "Sincronizando…",
             "error": "Sin conexión",
         }
-        colors = {
-            "offline": "#888888",
-            "connecting": "#888888",
-            "online": "#2e7d32",
-            "syncing": "#1565c0",
-            "error": "#c62828",
-        }
         self._connection_status = state
         text = labels.get(state, state)
-        color = colors.get(state, "#888888")
         self._conn_status_label.setText(text)
-        self._conn_status_label.setStyleSheet(f"color: {color}; padding: 0 8px;")
+        roles = {
+            "online": "status-online",
+            "syncing": "status-sync",
+            "error": "status-error",
+        }
+        mark_role(self._conn_status_label, roles.get(state, "meta"))
+        self._conn_status_label.setStyleSheet("padding: 0 8px;")
 
     def _show_folder_column(self) -> bool:
         return bool(
@@ -725,15 +804,16 @@ class MainWindow(QMainWindow):
         self._splitter_guard_timer.start(80)
 
     def _resume_splitter_panels(self) -> None:
-        if not self._splitter_drag_active:
-            return
-        self.message_viewer.set_viewer_updates_enabled(True)
-        self.message_table.viewport().setUpdatesEnabled(True)
-        for panel in (self._folder_panel, self._message_panel, self._reader_panel):
-            panel.setUpdatesEnabled(True)
-            panel.repaint()
-        self.main_splitter.repaint()
-        self._splitter_drag_active = False
+        if self._splitter_drag_active:
+            self.message_viewer.set_viewer_updates_enabled(True)
+            self.message_table.viewport().setUpdatesEnabled(True)
+            for panel in (self._folder_panel, self._message_panel, self._reader_panel):
+                panel.setUpdatesEnabled(True)
+                panel.repaint()
+            self.main_splitter.repaint()
+            self._splitter_drag_active = False
+        # Al estrechar el panel de lectura (sin maximizar/desmaximizar) hay que
+        # acortar las etiquetas para que los botones no se solapen.
         self._update_reader_action_labels()
 
     def resizeEvent(self, event) -> None:
@@ -751,15 +831,15 @@ class MainWindow(QMainWindow):
         self._ui_compact = compact
         self._ui_narrow = narrow
 
-        self.btn_new_folder.setText("＋" if narrow else "＋ Carpeta")
-        self.btn_new_subfolder.setText("＋ Sub" if narrow else "＋ Subcarpeta")
+        self.btn_new_folder.setText("" if narrow else "Carpeta")
+        self.btn_new_subfolder.setText("Sub" if narrow else "Subcarpeta")
         self.btn_manage_accounts.setText("…" if narrow else "Gestionar…")
-        self.btn_edit_account.setText("✎" if narrow else "Editar…")
-        self.btn_delete_selected.setText("🗑" if narrow else "🗑 Eliminar")
-        self.btn_move_selected.setText("📁" if narrow else "📁 Mover a…")
-        self.btn_prev_page.setText("◀" if narrow else "◀ Anterior")
-        self.btn_next_page.setText("▶" if narrow else "Siguiente ▶")
-        self.btn_cancel_sync.setText("✕ Sync" if compact else "Cancelar sincronización")
+        self.btn_edit_account.setText("" if narrow else "Editar…")
+        self.btn_delete_selected.setText("" if narrow else "Eliminar")
+        self.btn_move_selected.setText("" if narrow else "Mover a…")
+        self.btn_prev_page.setText("" if narrow else "Anterior")
+        self.btn_next_page.setText("" if narrow else "Siguiente")
+        self.btn_cancel_sync.setText("Cancelar" if compact else "Cancelar sincronización")
         self._apply_toolbar_labels(narrow)
         self.message_viewer.set_compact_toolbar(compact)
         self.message_viewer.sync_toolbar_strip()
@@ -772,10 +852,12 @@ class MainWindow(QMainWindow):
         return max(self.width() // 3, 280)
 
     def _reader_button_label_mode(self) -> str:
+        # Umbrales altos: con textos largos («Responder a todos») cuatro botones
+        # Expanding se solapan mucho antes de los 560 px del panel.
         width = self._reader_panel_width()
-        if width >= 560:
+        if width >= 680:
             return "full"
-        if width >= 400:
+        if width >= 460:
             return "compact"
         return "minimal"
 
@@ -784,44 +866,44 @@ class MainWindow(QMainWindow):
         labels = {
             "full": {
                 "row1": (
-                    (self._act_reply, "↩ Responder", "primary"),
-                    (self._act_reply_all, "↩↩ Responder a todos", "primary"),
-                    (self._act_forward, "→ Reenviar", "secondary"),
-                    (self._act_delete, "🗑 Eliminar", "danger"),
+                    (self._act_reply, "Responder", "primary"),
+                    (self._act_reply_all, "Responder a todos", "primary"),
+                    (self._act_forward, "Reenviar", "secondary"),
+                    (self._act_delete, "Eliminar", "danger"),
                 ),
                 "row2": (
-                    (self._act_mark_important, "★ Importante", "category"),
-                    (self._act_mark_spam, "⚠ Spam", "category"),
-                    (self._act_mark_normal, "● Normal", "category"),
-                    (self._act_unsubscribe, "✉ Dar de baja", "secondary"),
+                    (self._act_mark_important, "Importante", "category"),
+                    (self._act_mark_spam, "Spam", "category"),
+                    (self._act_mark_normal, "Normal", "category"),
+                    (self._act_unsubscribe, "Dar de baja", "secondary"),
                 ),
             },
             "compact": {
                 "row1": (
-                    (self._act_reply, "↩ Resp.", "primary"),
-                    (self._act_reply_all, "↩↩ Todos", "primary"),
-                    (self._act_forward, "→ Reenv.", "secondary"),
-                    (self._act_delete, "🗑", "danger"),
+                    (self._act_reply, "Resp.", "primary"),
+                    (self._act_reply_all, "Todos", "primary"),
+                    (self._act_forward, "Reenv.", "secondary"),
+                    (self._act_delete, "", "danger"),
                 ),
                 "row2": (
-                    (self._act_mark_important, "★ Imp.", "category"),
-                    (self._act_mark_spam, "⚠ Spam", "category"),
-                    (self._act_mark_normal, "● Norm.", "category"),
-                    (self._act_unsubscribe, "✉ Baja", "secondary"),
+                    (self._act_mark_important, "Imp.", "category"),
+                    (self._act_mark_spam, "Spam", "category"),
+                    (self._act_mark_normal, "Norm.", "category"),
+                    (self._act_unsubscribe, "Baja", "secondary"),
                 ),
             },
             "minimal": {
                 "row1": (
-                    (self._act_reply, "↩", "primary"),
-                    (self._act_reply_all, "↩↩", "primary"),
-                    (self._act_forward, "→", "secondary"),
-                    (self._act_delete, "🗑", "danger"),
+                    (self._act_reply, "", "primary"),
+                    (self._act_reply_all, "", "primary"),
+                    (self._act_forward, "", "secondary"),
+                    (self._act_delete, "", "danger"),
                 ),
                 "row2": (
-                    (self._act_mark_important, "★", "category"),
-                    (self._act_mark_spam, "⚠", "category"),
-                    (self._act_mark_normal, "●", "category"),
-                    (self._act_unsubscribe, "✉", "secondary"),
+                    (self._act_mark_important, "", "category"),
+                    (self._act_mark_spam, "", "category"),
+                    (self._act_mark_normal, "", "category"),
+                    (self._act_unsubscribe, "", "secondary"),
                 ),
             },
         }
@@ -1093,12 +1175,14 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_reader_row1"):
             return
         outer = QVBoxLayout(self.reader_actions)
-        outer.setContentsMargins(0, 4, 0, 8)
-        outer.setSpacing(12)
+        outer.setContentsMargins(0, 4, 0, 6)
+        outer.setSpacing(8)
         self._reader_row1 = QHBoxLayout()
-        self._reader_row1.setSpacing(6)
+        self._reader_row1.setSpacing(10)
+        self._reader_row1.setContentsMargins(0, 0, 0, 0)
         self._reader_row2 = QHBoxLayout()
-        self._reader_row2.setSpacing(6)
+        self._reader_row2.setSpacing(10)
+        self._reader_row2.setContentsMargins(0, 0, 0, 0)
         outer.addLayout(self._reader_row1)
         outer.addLayout(self._reader_row2)
 
@@ -1113,12 +1197,27 @@ class MainWindow(QMainWindow):
         self, action: QAction, label: str, role: str
     ) -> QPushButton:
         btn = QPushButton(label)
+        btn.setIcon(action.icon())
+        btn.setIconSize(QSize(16, 16))
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         mark_role(btn, role)
+        # Densidad según el ancho del panel: menos padding evita solapes.
+        density = self._reader_label_mode or self._reader_button_label_mode()
+        btn.setProperty("pyqReaderAction", density)
         btn.setEnabled(action.isEnabled())
+        # Expanding reparte el ancho, pero el mínimo debe poder bajar al icono
+        # para que el layout no empuje botones unos encima de otros.
         btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn.setMinimumWidth(40 if not label else 56)
+        btn.setMinimumHeight(32)
         btn.clicked.connect(action.trigger)
         btn.setToolTip(action.toolTip() or action.text())
+        btn.setAccessibleName(action.text())
+        btn.setProperty("pyqUnsubscribe", action is self._act_unsubscribe)
+        # Fuerza a Qt a aplicar el padding según pyqReaderAction.
+        style = btn.style()
+        style.unpolish(btn)
+        style.polish(btn)
         return btn
 
     def _build_reader_actions(self) -> None:
@@ -1127,17 +1226,17 @@ class MainWindow(QMainWindow):
         self._clear_layout(self._reader_row1)
         self._clear_layout(self._reader_row2)
         self._reader_buttons.clear()
-        row1_specs, row2_specs = self._reader_action_specs()
         self._reader_label_mode = self._reader_button_label_mode()
+        row1_specs, row2_specs = self._reader_action_specs()
 
         for action, label, role in row1_specs:
             btn = self._make_reader_button(action, label, role)
-            self._reader_row1.addWidget(btn)
+            self._reader_row1.addWidget(btn, 1)
             self._reader_buttons.append(btn)
 
         for action, label, role in row2_specs:
             btn = self._make_reader_button(action, label, role)
-            self._reader_row2.addWidget(btn)
+            self._reader_row2.addWidget(btn, 1)
             self._reader_buttons.append(btn)
         self._sync_reader_actions_height()
 
@@ -1146,7 +1245,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "reader_actions"):
             return
         self.reader_actions.adjustSize()
-        height = max(self.reader_actions.sizeHint().height(), 104)
+        height = max(self.reader_actions.sizeHint().height(), 92)
         self.reader_actions.setFixedHeight(height)
 
     @staticmethod
@@ -1239,13 +1338,13 @@ class MainWindow(QMainWindow):
         if has_row:
             if len(selected) == 1:
                 tip = "Eliminar el mensaje seleccionado (Supr)"
-                delete_label = "🗑" if self._ui_narrow else "🗑 Eliminar"
+                delete_label = "" if self._ui_narrow else "Eliminar"
             else:
                 tip = f"Eliminar {len(selected)} mensajes seleccionados (Supr)"
                 delete_label = (
-                    "🗑"
+                    ""
                     if self._ui_narrow
-                    else f"🗑 Eliminar ({len(selected)})"
+                    else f"Eliminar ({len(selected)})"
                 )
             self._act_delete.setToolTip(tip)
             if hasattr(self, "btn_delete_selected"):
@@ -1273,7 +1372,7 @@ class MainWindow(QMainWindow):
         for index, btn in enumerate(self._reader_buttons):
             if index <= 2:
                 btn.setEnabled(has_row and loaded)
-            elif btn.text().startswith("✉"):
+            elif btn.property("pyqUnsubscribe"):
                 msg = self._current_message
                 can_unsub = bool(
                     loaded
@@ -1366,14 +1465,14 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
 
         for action in (self._act_reply, self._act_reply_all, self._act_forward):
-            menu_action = menu.addAction(action.text())
+            menu_action = menu.addAction(action.icon(), action.text())
             menu_action.setShortcut(action.shortcut())
             menu_action.setEnabled(loaded)
             menu_action.triggered.connect(action.trigger)
 
         menu.addSeparator()
 
-        delete_action = menu.addAction(self._act_delete.text())
+        delete_action = menu.addAction(self._act_delete.icon(), self._act_delete.text())
         delete_action.setShortcut(self._act_delete.shortcut())
         delete_action.triggered.connect(self._act_delete.trigger)
 
@@ -1389,13 +1488,13 @@ class MainWindow(QMainWindow):
         uid = self._message_uids[row]
         summary = _selected_summary(uid, self._all_messages)
         if summary and summary.flagged:
-            flag_action = menu.addAction("☆ Quitar destacado")
+            flag_action = menu.addAction(action_icon("star"), "Quitar destacado")
         else:
-            flag_action = menu.addAction("★ Destacar")
+            flag_action = menu.addAction(action_icon("star"), "Destacar")
         flag_action.setShortcut(QKeySequence("Ctrl+D"))
         flag_action.triggered.connect(self._toggle_selected_flag)
 
-        archive_action = menu.addAction("🗄 Archivar")
+        archive_action = menu.addAction(action_icon("archive"), "Archivar")
         archive_action.setShortcut(QKeySequence("Ctrl+E"))
         archive_action.triggered.connect(self._archive_selected_messages)
 
@@ -1406,7 +1505,7 @@ class MainWindow(QMainWindow):
             self._act_mark_spam,
             self._act_mark_normal,
         ):
-            cat_action = category_menu.addAction(action.text())
+            cat_action = category_menu.addAction(action.icon(), action.text())
             cat_action.setEnabled(True)
             cat_action.triggered.connect(action.trigger)
 
@@ -1877,6 +1976,8 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Principal")
         toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(18, 18))
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._main_toolbar = toolbar
         self.addToolBar(toolbar)
         toolbar.addAction(self._act_compose)
@@ -1896,10 +1997,13 @@ class MainWindow(QMainWindow):
 
     def _update_accounts_registry(self) -> None:
         """Propaga la lista de cuentas a la sincronización en segundo plano."""
+        self._invalidate_cached_account_folders()
         self._background_sync.set_accounts(
             self.accounts,
             self.current_account.id if self.current_account else None,
         )
+        if hasattr(self, "folder_tree"):
+            self._refresh_folder_tree(select_folder=self._current_folder)
 
     def _refresh_account_combo(self, select_id: str | None = None) -> None:
         """Actualiza el selector de cuentas."""
@@ -2035,7 +2139,10 @@ class MainWindow(QMainWindow):
                     self.mail_service = None
                 self.current_account = None
                 self._all_messages = []
-                self.folder_tree.clear()
+                self._folder_names = []
+                self._folder_unread = {}
+                # El árbol sigue mostrando el resto de cuentas desde la caché.
+                self._refresh_folder_tree()
                 self.message_table.setRowCount(0)
                 self._set_message_actions_enabled(False)
                 self._show_welcome()
@@ -2076,8 +2183,16 @@ class MainWindow(QMainWindow):
             self._stop_thread(worker, wait_ms=1500)
         self._connect_worker = None
 
-    def _connect_account(self, account: MailAccount, *, block_ui: bool = False) -> None:
-        """Inicia la conexión IMAP en segundo plano para la cuenta indicada."""
+    def _connect_account(
+        self,
+        account: MailAccount,
+        *,
+        block_ui: bool = False,
+        preload_cache: bool = True,
+    ) -> None:
+        """Inicia IMAP sin borrar la caché que ya esté visible."""
+        if hasattr(self, "_connection_banner"):
+            self._connection_banner.hide()
         auth_secret = self.settings.get_auth_secret(account)
         if not auth_secret:
             if account.auth_method == AuthMethod.OAUTH2.value:
@@ -2098,6 +2213,13 @@ class MainWindow(QMainWindow):
         self._stop_connect_worker()
         self._stop_folder_unread_worker()
         self._background_sync.stop(wait_ms=0)
+        switching_account = bool(
+            self.current_account and str(self.current_account.id) != str(account.id)
+        )
+        if switching_account:
+            # La cuenta que deja de estar activa vuelve a leerse de la caché.
+            self._invalidate_cached_account_folders(self.current_account.id)
+        self._invalidate_cached_account_folders(account.id)
         if self.mail_service:
             self.mail_service.disconnect()
             self.mail_service = None
@@ -2105,13 +2227,23 @@ class MainWindow(QMainWindow):
         self._connect_generation += 1
         connect_gen = self._connect_generation
 
+        if switching_account:
+            # Evita pintar en el árbol las carpetas de la cuenta anterior
+            # mientras se cargan las de la nueva.
+            self._folder_names = self.mail_cache.load_account_folders(account.id)
+            self._folder_unread = {}
         self.current_account = account
         self.settings.set_last_account_id(account.id)
         self._update_accounts_registry()
         self._refresh_account_combo(account.id)
-        last_folder = self.settings.get_last_folder(account.id) or self._current_folder or "INBOX"
-        self._preload_cached_folders(account.id)
-        self._preload_cached_folder(account.id, last_folder)
+        if preload_cache:
+            last_folder = (
+                self.settings.get_last_folder(account.id)
+                or self._current_folder
+                or "INBOX"
+            )
+            self._preload_cached_folders(account.id)
+            self._preload_cached_folder(account.id, last_folder)
         self._update_connection_status("connecting")
         self.status_bar.showMessage(f"Conectando a {account.email}…")
         if block_ui:
@@ -2129,6 +2261,28 @@ class MainWindow(QMainWindow):
         worker.start()
         self._connect_worker = worker
         self._track_worker(worker)
+        QTimer.singleShot(
+            SLOW_CONNECTION_HINT_MS,
+            lambda g=connect_gen: self._warn_slow_connection(g),
+        )
+
+    def _warn_slow_connection(self, generation: int) -> None:
+        """Avisa si el servidor no responde, sin cancelar el intento en curso."""
+        if generation != self._connect_generation or self.mail_service:
+            return
+        if self._connection_status != "connecting":
+            return
+        account = self.current_account
+        host = account.imap_host if account else ""
+        host_detail = f"{host} " if host else "El servidor "
+        self._connection_banner_label.setText(
+            f"{host_detail}no responde todavía. Puede ser un problema de DNS o de red. "
+            "Mientras tanto puedes leer el correo ya descargado."
+        )
+        self._connection_banner.show()
+        self.status_bar.showMessage(
+            "La conexión está tardando — mostrando correo guardado"
+        )
 
     def _on_connected(self, folder_names, generation: int | None = None) -> None:
         stale = generation is not None and generation != self._connect_generation
@@ -2161,14 +2315,20 @@ class MainWindow(QMainWindow):
                 or self._current_folder
                 or "INBOX"
             )
-            self._start_folder_sync(folder)
+            manual = self._pending_manual_refresh
+            self._pending_manual_refresh = False
+            if manual and folder != self._current_folder:
+                folder = self._current_folder or folder
+            self._start_folder_sync(folder, manual_refresh=manual)
             self._background_sync.set_accounts(
                 self.accounts, self.current_account.id if self.current_account else None
             )
             self._background_sync.start(wait_ms=500)
             self._update_connection_status("online")
+            self._connection_banner.hide()
             self.status_bar.showMessage(f"Conectado a {self.current_account.email}")
             self._apply_pending_nav()
+            self._apply_pending_folder_rename()
         except Exception as exc:
             from pyqorreos.core.network_errors import friendly_mail_error
 
@@ -2178,15 +2338,11 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self.mail_service = None
-            self._update_connection_status("error")
-            self.status_bar.showMessage("Error de conexión")
             account_email = (
                 self.current_account.email if self.current_account else ""
             )
-            QMessageBox.critical(
-                self,
-                "Error de conexión",
-                f"No se pudo conectar:\n\n{friendly_mail_error(exc, email=account_email)}",
+            self._handle_connection_failure(
+                friendly_mail_error(exc, email=account_email)
             )
         finally:
             self.setEnabled(True)
@@ -2232,7 +2388,9 @@ class MainWindow(QMainWindow):
                 summaries, g, aid
             )
         )
-        worker.signals.error.connect(lambda _msg: None)
+        worker.signals.error.connect(
+            lambda _msg, aid=account_id: self._on_startup_cache_error(aid)
+        )
         worker.start()
         self._track_worker(worker)
 
@@ -2246,23 +2404,115 @@ class MainWindow(QMainWindow):
             return
         if not self.current_account or str(self.current_account.id) != str(account_id):
             return
-        if not summaries:
-            return
-        self._all_messages = summaries
-        self._render_message_table()
-        self.status_bar.showMessage(
-            f"{len(summaries):,} en caché — conectando y buscando correo nuevo…".replace(
-                ",", "."
+        if summaries:
+            self._all_messages = summaries
+            self._render_message_table()
+            self.subject_label.setText("Selecciona un mensaje")
+            self.message_viewer.show_plain(
+                "Selecciona un mensaje de la lista para ver su contenido."
             )
+            cached = f"{len(summaries):,}".replace(",", ".")
+            if self._connection_status == "error":
+                self.status_bar.showMessage(
+                    f"Sin conexión — mostrando {cached} mensajes guardados"
+                )
+            else:
+                self.status_bar.showMessage(
+                    f"{cached} mensajes cargados — buscando correo nuevo…"
+                )
+        else:
+            self._render_message_table()
+        self._start_deferred_startup_connection(account_id)
+
+    def _on_startup_cache_error(self, account_id: str) -> None:
+        """Continúa con la red si la lectura local falla inesperadamente."""
+        self._start_deferred_startup_connection(account_id)
+
+    def _start_deferred_startup_connection(self, account_id: str) -> None:
+        """Inicia la red una sola vez, después de construir y cargar la interfaz."""
+        if self._startup_connection_pending_account_id != account_id:
+            return
+        account = self.current_account
+        if not account or str(account.id) != str(account_id):
+            return
+        self._startup_connection_pending_account_id = None
+        self._background_sync.set_accounts(self.accounts, account.id)
+        if self._prefs.background_sync_enabled:
+            self._background_sync.sync_all_accounts_now(
+                exclude_account_id=account.id
+            )
+        self._connect_account(account, block_ui=False, preload_cache=False)
+
+    def _folder_delimiter(self) -> str:
+        """
+        Separador de carpetas del servidor activo («/» o «.»).
+
+        Nunca consulta al servidor: se usa el que ya conozca la sesión y, si
+        todavía no hizo LIST, se deduce de los nombres en caché.
+        """
+        if self.mail_service:
+            known = self.mail_service.cached_folder_delimiter()
+            if known:
+                return known
+        return detect_folder_delimiter(self._folder_names)
+
+    def _account_label(self, account: MailAccount) -> str:
+        name = (account.display_name or "").strip()
+        return f"{name} · {account.email}" if name else account.email
+
+    def _cached_account_folders(self, account_id: str) -> AccountFolders:
+        """Carpetas y totales de una cuenta inactiva, leídos de la caché local."""
+        cached = self._other_account_folders.get(account_id)
+        if cached is None:
+            folders = self.mail_cache.load_account_folders(account_id)
+            counts = self.mail_cache.folder_total_counts(account_id, folders or None)
+            cached = (folders, counts)
+            self._other_account_folders[account_id] = cached
+        folders, counts = cached
+        account = next(
+            (a for a in self.accounts if str(a.id) == str(account_id)), None
+        )
+        return AccountFolders(
+            account_id=str(account_id),
+            label=self._account_label(account) if account else str(account_id),
+            folders=list(folders),
+            counts=dict(counts),
         )
 
+    def _invalidate_cached_account_folders(self, account_id: str | None = None) -> None:
+        if account_id is None:
+            self._other_account_folders.clear()
+        else:
+            self._other_account_folders.pop(str(account_id), None)
+
     def _refresh_folder_tree(self, select_folder: str | None = None) -> None:
+        active_id = str(self.current_account.id) if self.current_account else ""
+        entries: list[AccountFolders] = []
+        for account in self.accounts:
+            account_id = str(account.id)
+            if account_id == active_id:
+                entries.append(
+                    AccountFolders(
+                        account_id=account_id,
+                        label=self._account_label(account),
+                        folders=list(self._folder_names),
+                        counts=dict(self._folder_unread),
+                    )
+                )
+            else:
+                entries.append(self._cached_account_folders(account_id))
+
+        expansion = current_expansion(self.folder_tree)
+        if active_id and not expansion.is_empty():
+            expansion.accounts.add(active_id)
+
         self.folder_tree.blockSignals(True)
-        populate_folder_tree(
+        populate_accounts_tree(
             self.folder_tree,
-            self._folder_names,
-            self._folder_unread,
+            entries,
+            active_account_id=active_id,
             select_folder=select_folder or self._current_folder,
+            expansion=expansion,
         )
         self.folder_tree.blockSignals(False)
 
@@ -2332,9 +2582,21 @@ class MainWindow(QMainWindow):
         self._refresh_folder_tree(select_folder=self._current_folder)
 
     def _show_folder_context_menu(self, pos) -> None:
-        folder = selected_folder_path(self.folder_tree)
-        if not folder or not self.mail_service:
+        item = self.folder_tree.itemAt(pos) or self.folder_tree.currentItem()
+        account_id = item_account_id(item)
+        folder = item_folder_path(item)
+        active_id = str(self.current_account.id) if self.current_account else ""
+
+        if account_id and account_id != active_id:
+            self._show_other_account_context_menu(pos, account_id, folder)
             return
+        if not folder:
+            self._show_active_account_context_menu(pos)
+            return
+        if not self.mail_service:
+            self._show_offline_folder_context_menu(pos, folder)
+            return
+
         menu = QMenu(self)
 
         uids = self._selected_message_uids()
@@ -2377,6 +2639,62 @@ class MainWindow(QMainWindow):
             )
         refresh = menu.addAction("Actualizar carpeta")
         refresh.triggered.connect(self._refresh)
+        export_mbox = menu.addAction("Exportar carpeta a .mbox…")
+        export_mbox.triggered.connect(self._export_current_folder_mbox)
+        menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
+
+    def _show_other_account_context_menu(
+        self, pos, account_id: str, folder: str
+    ) -> None:
+        """Menú para carpetas de una cuenta que todavía no está activa."""
+        account = next(
+            (a for a in self.accounts if str(a.id) == str(account_id)), None
+        )
+        if not account:
+            return
+        menu = QMenu(self)
+        if folder:
+            open_here = menu.addAction(f"Abrir «{folder}» en {account.email}")
+            open_here.triggered.connect(
+                lambda _checked=False, a=account_id, f=folder: self._switch_to_account(
+                    a, f
+                )
+            )
+            if not is_protected_folder(folder):
+                rename = menu.addAction("Renombrar carpeta…")
+                rename.triggered.connect(
+                    lambda _checked=False, a=account_id, f=folder: (
+                        self._request_folder_rename(a, f)
+                    )
+                )
+        else:
+            activate = menu.addAction(f"Cambiar a {account.email}")
+            activate.triggered.connect(
+                lambda _checked=False, a=account_id: self._switch_to_account(a)
+            )
+        menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
+
+    def _show_active_account_context_menu(self, pos) -> None:
+        """Menú del nodo de la cuenta activa."""
+        menu = QMenu(self)
+        new_folder = menu.addAction("Nueva carpeta…")
+        new_folder.triggered.connect(lambda: self._create_folder(None))
+        refresh = menu.addAction("Actualizar")
+        refresh.triggered.connect(self._refresh)
+        menu.addSeparator()
+        edit = menu.addAction("Editar cuenta…")
+        edit.triggered.connect(self._edit_current_account)
+        menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
+
+    def _show_offline_folder_context_menu(self, pos, folder: str) -> None:
+        """Sin sesión IMAP solo ofrecemos lo que funciona con la caché local."""
+        menu = QMenu(self)
+        open_cached = menu.addAction("Abrir carpeta guardada")
+        open_cached.triggered.connect(
+            lambda _checked=False, f=folder: self._start_folder_sync(f)
+        )
+        reconnect = menu.addAction("Reconectar y actualizar")
+        reconnect.triggered.connect(self._refresh)
         export_mbox = menu.addAction("Exportar carpeta a .mbox…")
         export_mbox.triggered.connect(self._export_current_folder_mbox)
         menu.exec(self.folder_tree.viewport().mapToGlobal(pos))
@@ -2451,7 +2769,9 @@ class MainWindow(QMainWindow):
             )
             return
 
-        children = folder_descendants(self._folder_names, folder)
+        children = folder_descendants(
+            self._folder_names, folder, self._folder_delimiter()
+        )
         if children:
             child_list = "\n".join(f"  • {name}" for name in children)
             text = (
@@ -2492,8 +2812,9 @@ class MainWindow(QMainWindow):
         self._folder_names = folders
         if self.current_account:
             self.mail_cache.save_account_folders(self.current_account.id, folders)
+        sep = self._folder_delimiter()
         if self._current_folder in deleted_paths or any(
-            self._current_folder.startswith(path + "/") for path in deleted_paths
+            self._current_folder.startswith(path + sep) for path in deleted_paths
         ):
             self._current_folder = "INBOX"
             self._all_messages = []
@@ -2517,16 +2838,15 @@ class MainWindow(QMainWindow):
 
     def _on_folder_tree_double_clicked(self, item, _column: int) -> None:
         """Doble clic sobre una carpeta: renombrar (si no es del sistema)."""
-        if item is None:
+        folder = item_folder_path(item)
+        if not folder or is_protected_folder(folder):
             return
-        folder = item.data(0, Qt.ItemDataRole.UserRole)
-        if not folder or is_protected_folder(str(folder)):
-            return
-        self._rename_folder(str(folder))
+        self._request_folder_rename(item_account_id(item), folder)
 
     def _rename_selected_folder(self) -> None:
         """Renombra la carpeta seleccionada (atajo F2)."""
-        folder = selected_folder_path(self.folder_tree)
+        item = self.folder_tree.currentItem()
+        folder = item_folder_path(item)
         if not folder:
             return
         if is_protected_folder(folder):
@@ -2536,7 +2856,46 @@ class MainWindow(QMainWindow):
                 f"La carpeta «{folder}» es del sistema y no se puede renombrar.",
             )
             return
+        self._request_folder_rename(item_account_id(item), folder)
+
+    def _request_folder_rename(self, account_id: str, folder: str) -> None:
+        """Renombra una carpeta, activando antes su cuenta si hace falta."""
+        if not folder or is_protected_folder(folder):
+            return
+        active_id = str(self.current_account.id) if self.current_account else ""
+        if account_id and account_id != active_id:
+            account = next(
+                (a for a in self.accounts if str(a.id) == str(account_id)), None
+            )
+            if not account:
+                return
+            self._pending_folder_rename = (str(account_id), folder)
+            self.status_bar.showMessage(
+                f"Cambiando a {account.email} para renombrar «{folder}»…"
+            )
+            self._switch_to_account(str(account_id), folder)
+            return
+        if not self.mail_service:
+            QMessageBox.information(
+                self,
+                "Sin conexión",
+                "Conéctate al servidor antes de renombrar carpetas.\n"
+                "Pulsa «Actualizar» (F5) para reintentar la conexión.",
+            )
+            return
         self._rename_folder(folder)
+
+    def _apply_pending_folder_rename(self) -> None:
+        """Abre el diálogo de renombrado tras cambiar de cuenta."""
+        pending = self._pending_folder_rename
+        if not pending:
+            return
+        account_id, folder = pending
+        if not self.current_account or str(self.current_account.id) != account_id:
+            return
+        self._pending_folder_rename = None
+        if self.mail_service:
+            self._rename_folder(folder)
 
     def _rename_folder(self, folder: str) -> None:
         if not self.mail_service or not self.current_account:
@@ -2548,7 +2907,10 @@ class MainWindow(QMainWindow):
                 f"La carpeta «{folder}» es del sistema y no se puede renombrar.",
             )
             return
-        current_leaf = folder_leaf(folder)
+        # folder_leaf() normaliza a minúsculas; para el diálogo hace falta el
+        # nombre tal cual está en el servidor.
+        sep = self._folder_delimiter()
+        current_leaf = folder.rsplit(sep, 1)[-1].strip()
         new_name, ok = QInputDialog.getText(
             self,
             "Renombrar carpeta",
@@ -2561,11 +2923,11 @@ class MainWindow(QMainWindow):
         if not new_name:
             QMessageBox.warning(self, "Renombrar carpeta", "Indica un nombre para la carpeta.")
             return
-        if "/" in new_name:
+        if sep in new_name or "/" in new_name:
             QMessageBox.warning(
                 self,
                 "Renombrar carpeta",
-                "El nombre no puede contener «/».",
+                f"El nombre no puede contener «{sep}».",
             )
             return
         if new_name == current_leaf:
@@ -2595,8 +2957,9 @@ class MainWindow(QMainWindow):
                 self._folder_unread[new] = self._folder_unread.pop(old)
         new_current = rename_map.get(self._current_folder)
         if new_current is None:
+            sep = self._folder_delimiter()
             for old, new in rename_map.items():
-                if self._current_folder.startswith(old + "/"):
+                if self._current_folder.startswith(old + sep):
                     new_current = new + self._current_folder[len(old):]
                     break
         if new_current:
@@ -2631,22 +2994,27 @@ class MainWindow(QMainWindow):
             self._on_background_folder_updated(account_id, folder)
 
     def _on_background_folder_updated(self, account_id: str, folder: str) -> None:
-        if (
-            self.current_account
-            and self.current_account.id == account_id
-            and folder == self._current_folder
-        ):
+        is_active = bool(
+            self.current_account and str(self.current_account.id) == str(account_id)
+        )
+        if is_active and folder == self._current_folder:
             cached = self.mail_cache.load_folder(account_id, folder)
             if cached:
                 self._all_messages = cached
                 self._render_message_table()
+        if not is_active:
+            # Refleja el correo nuevo en el nodo de esa cuenta dentro del árbol.
+            self._invalidate_cached_account_folders(account_id)
+            self._refresh_folder_tree(select_folder=self._current_folder)
+            return
         self._refresh_folder_unread_counts()
 
     def _start_folder_sync(self, folder: str, *, manual_refresh: bool = False) -> None:
         """Carga caché local al instante y sincroniza con el servidor en segundo plano."""
-        if not self.mail_service or not self.current_account:
+        if not self.current_account:
             return
 
+        offline = self.mail_service is None
         same_folder = manual_refresh and folder == self._current_folder
 
         self._cancel_sync()
@@ -2664,7 +3032,12 @@ class MainWindow(QMainWindow):
             if cached:
                 self._all_messages = cached
                 self._render_message_table()
-            self.status_bar.showMessage(f"Buscando correo nuevo en {folder}…")
+            if offline:
+                self.status_bar.showMessage(
+                    f"Sin conexión — mostrando {folder} desde la caché local"
+                )
+            else:
+                self.status_bar.showMessage(f"Buscando correo nuevo en {folder}…")
         else:
             self._cancel_message_fetch()
             self._current_page = 0
@@ -2687,11 +3060,21 @@ class MainWindow(QMainWindow):
             self._all_messages = []
             self._render_message_table()
             count = self.mail_cache.folder_count(self.current_account.id, folder)
-            if count:
+            if count and offline:
+                self.status_bar.showMessage(
+                    f"Sin conexión — cargando {count:,} mensajes guardados de {folder}…".replace(
+                        ",", "."
+                    )
+                )
+            elif count:
                 self.status_bar.showMessage(
                     f"Cargando {count:,} mensajes en caché — sincronizando {folder}…".replace(
                         ",", "."
                     )
+                )
+            elif offline:
+                self.status_bar.showMessage(
+                    f"Sin conexión — {folder} no tiene mensajes guardados"
                 )
             else:
                 self.status_bar.showMessage(f"Sincronizando {folder}…")
@@ -2716,6 +3099,12 @@ class MainWindow(QMainWindow):
             )
             load_worker.start()
             self._track_worker(load_worker)
+
+        if offline:
+            self._manual_refresh_active = False
+            self.btn_cancel_sync.setVisible(False)
+            self.sync_progress.setVisible(False)
+            return
 
         self.btn_cancel_sync.setVisible(True)
         self.sync_progress.setVisible(False)
@@ -2800,9 +3189,14 @@ class MainWindow(QMainWindow):
             return
         self._all_messages = summaries
         self._render_message_table()
-        if summaries:
+        if not summaries:
+            return
+        count = f"{len(summaries):,}".replace(",", ".")
+        if self.mail_service:
+            self.status_bar.showMessage(f"{count} en caché — sincronizando {folder}…")
+        else:
             self.status_bar.showMessage(
-                f"{len(summaries):,} en caché — sincronizando {folder}…".replace(",", ".")
+                f"Sin conexión — {count} mensajes guardados en {folder}"
             )
 
     def _on_folder_cache_error(
@@ -2918,28 +3312,96 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Error de sincronización")
         QMessageBox.warning(self, "Error de sincronización", message)
 
+    def _show_cached_inbox_after_connection_error(self) -> bool:
+        """Muestra INBOX local si la carpeta activa no tiene datos disponibles."""
+        account = self.current_account
+        if (
+            not account
+            or self._all_messages
+            or self._current_folder == "INBOX"
+            or self.mail_cache.folder_count(account.id, "INBOX") <= 0
+        ):
+            return False
+        self._current_folder = "INBOX"
+        self._refresh_folder_tree(select_folder="INBOX")
+        self._preload_cached_folder(account.id, "INBOX")
+        return True
+
+    def _handle_connection_failure(self, message: str) -> None:
+        """Mantiene la app utilizable sin red y explica qué host ha fallado."""
+        self._pending_manual_refresh = False
+        # Sin sesión no se puede renombrar: descarta la petición en vez de
+        # dispararla mucho después, cuando el usuario ya no la espera.
+        self._pending_folder_rename = None
+        self._update_connection_status("error")
+        showing_cache = self._show_cached_inbox_after_connection_error()
+        if showing_cache or self._all_messages:
+            self.status_bar.showMessage("Sin conexión — mostrando correo guardado")
+        else:
+            self.status_bar.showMessage("Sin conexión")
+
+        account = self.current_account
+        host = account.imap_host if account else ""
+        host_detail = f"Servidor IMAP: {host}. " if host else ""
+        cache_detail = (
+            " PyQorreos seguirá funcionando con los mensajes guardados localmente."
+            if showing_cache or self._all_messages
+            else ""
+        )
+        self._connection_banner_label.setText(
+            f"{host_detail}{message}{cache_detail}"
+        )
+        self._connection_banner.show()
+
+    def _retry_current_account(self) -> None:
+        """Reintenta la conexión sin bloquear el contenido visible."""
+        if self.current_account:
+            self._pending_manual_refresh = True
+            self._connect_account(
+                self.current_account,
+                block_ui=False,
+                preload_cache=False,
+            )
+
     def _on_connect_error(self, message: str, generation: int | None = None) -> None:
         try:
             if generation is not None and generation != self._connect_generation:
                 return
-            self._update_connection_status("error")
-            self.status_bar.showMessage("Error de conexión")
-            QMessageBox.critical(
-                self,
-                "Error de conexión",
-                f"No se pudo conectar:\n\n{message}",
-            )
+            self._handle_connection_failure(message)
         finally:
             self.setEnabled(True)
             self._connect_worker = None
 
     def _on_folder_tree_changed(self, current, _previous) -> None:
-        if not current or not self.mail_service:
+        if not current or not self.current_account:
             return
-        folder = selected_folder_path(self.folder_tree)
+        account_id = item_account_id(current)
+        folder = item_folder_path(current)
+        if account_id and account_id != str(self.current_account.id):
+            self._switch_to_account(account_id, folder or None)
+            return
         if not folder or folder == self._current_folder:
             return
         self._start_folder_sync(folder)
+
+    def _switch_to_account(self, account_id: str, folder: str | None = None) -> bool:
+        """Activa otra cuenta del árbol y, si se indica, abre una de sus carpetas."""
+        account = next(
+            (a for a in self.accounts if str(a.id) == str(account_id)), None
+        )
+        if not account:
+            return False
+        if self.current_account and str(self.current_account.id) == str(account_id):
+            if folder and folder != self._current_folder:
+                self._start_folder_sync(folder)
+            return True
+        target = folder or self.settings.get_last_folder(account.id) or "INBOX"
+        self._pending_nav = (str(account.id), target, None)
+        self._current_folder = target
+        self.settings.set_last_folder(account.id, target)
+        self.status_bar.showMessage(f"Cambiando a {account.email}…")
+        self._connect_account(account)
+        return True
 
     def _apply_list_filters(self) -> None:
         if not hasattr(self, "message_table"):
@@ -2971,7 +3433,7 @@ class MainWindow(QMainWindow):
             self._render_message_table()
 
     def _next_page(self) -> None:
-        filtered_count = len(self._filtered_messages())
+        filtered_count = self._last_filtered_total
         if self._current_page < self._total_pages_for(filtered_count) - 1:
             self._current_page += 1
             self._render_message_table()
@@ -3115,9 +3577,13 @@ class MainWindow(QMainWindow):
         show_folder = self._show_folder_column()
         colors = self._category_colors()
         fg = QBrush(self._text_color())
+        default_bg = QBrush(QColor(255, 255, 255))
+        brushes = {category: QBrush(color) for category, color in colors.items()}
+        bold_font = _font_bold(self.message_table.font())
         preserve_uid = self._selected_message_uid()
         if not preserve_uid and self._current_message:
             preserve_uid = self._current_message.uid
+        self.message_table.setUpdatesEnabled(False)
         self.message_table.blockSignals(True)
         self.message_table.setRowCount(0)
         self._message_uids: list[str] = []
@@ -3162,7 +3628,7 @@ class MainWindow(QMainWindow):
             )
             date_item = QTableWidgetItem(date_str)
 
-            bg = QBrush(colors.get(summary.category, QColor(255, 255, 255)))
+            bg = brushes.get(summary.category, default_bg)
             row_items = [category_item, sender_item, subject_item, date_item]
             if show_folder:
                 folder_item = QTableWidgetItem(self._summary_folder(summary))
@@ -3173,9 +3639,8 @@ class MainWindow(QMainWindow):
                 item.setForeground(fg)
 
             if not summary.seen:
-                bold = _font_bold(self.message_table.font())
-                sender_item.setFont(bold)
-                subject_item.setFont(bold)
+                sender_item.setFont(bold_font)
+                subject_item.setFont(bold_font)
 
             col = 0
             for item in row_items:
@@ -3186,20 +3651,26 @@ class MainWindow(QMainWindow):
         if preserve_uid and preserve_uid in self._message_uids:
             self.message_table.selectRow(self._message_uids.index(preserve_uid))
         self.message_table.blockSignals(False)
+        self.message_table.setUpdatesEnabled(True)
+        self.message_table.viewport().update()
+        self._last_filtered_total = len(filtered)
         self._update_pagination_controls(len(messages), len(filtered), pages)
         self._update_message_actions()
 
-        counts = {
-            MailCategory.NORMAL: sum(1 for m in self._all_messages if m.category == MailCategory.NORMAL),
-            MailCategory.IMPORTANT: sum(1 for m in self._all_messages if m.category == MailCategory.IMPORTANT),
-            MailCategory.SPAM: sum(1 for m in self._all_messages if m.category == MailCategory.SPAM),
-        }
+        important = 0
+        spam = 0
+        for summary in self._all_messages:
+            if summary.category == MailCategory.IMPORTANT:
+                important += 1
+            elif summary.category == MailCategory.SPAM:
+                spam += 1
+        offline_hint = "" if self.mail_service else " — sin conexión"
         self.status_bar.showMessage(
             f"Pág. {self._current_page + 1}/{pages} — "
             f"{len(filtered)} correos — "
-            f"★ {counts[MailCategory.IMPORTANT]} importantes, "
-            f"⚠ {counts[MailCategory.SPAM]} spam — "
-            f"doble clic para abrir"
+            f"★ {important} importantes, "
+            f"⚠ {spam} spam — "
+            f"doble clic para abrir{offline_hint}"
         )
 
     def _mark_selected_category(self, category: MailCategory) -> None:
@@ -3312,12 +3783,17 @@ class MainWindow(QMainWindow):
         self._on_message_double_clicked(row, 0)
 
     def _on_message_double_clicked(self, row: int, _col: int) -> None:
-        if row < 0 or not self.mail_service or not hasattr(self, "_message_uids"):
+        if row < 0 or not hasattr(self, "_message_uids"):
             return
         if row >= len(self._message_uids):
             return
         uid = self._message_uids[row]
         if is_drafts_folder(self._current_folder):
+            if not self.mail_service:
+                self.status_bar.showMessage(
+                    "Sin conexión: conéctate para editar borradores."
+                )
+                return
             self._open_draft_message(uid)
             return
         force = bool(
@@ -3364,7 +3840,7 @@ class MainWindow(QMainWindow):
         self, *, row: int | None = None, force: bool = False
     ) -> None:
         """Descarga y muestra el mensaje de la fila indicada (o la seleccionada)."""
-        if not self.mail_service or not hasattr(self, "_message_uids"):
+        if not hasattr(self, "_message_uids"):
             return
         if row is None:
             row = self.message_table.currentRow()
@@ -3400,6 +3876,10 @@ class MainWindow(QMainWindow):
         self.message_viewer.show_plain("Cargando mensaje…")
         self.attachment_panel.clear()
 
+        if not self.mail_service:
+            self._display_offline_message(uid, fetch_folder, generation)
+            return
+
         worker = FetchMessageWorker(
             self.mail_service,
             uid,
@@ -3420,9 +3900,39 @@ class MainWindow(QMainWindow):
         self._message_fetch_worker = worker
         self._track_worker(worker)
 
+    def _display_offline_message(
+        self, uid: str, folder: str, generation: int
+    ) -> None:
+        """Abre un mensaje desde la caché local cuando no hay sesión IMAP."""
+        cached = None
+        if self.current_account:
+            cached = self.mail_cache.load_message_body(
+                self.current_account.id, folder, uid
+            )
+        if cached and not self._message_body_is_empty(cached):
+            self._display_message(cached, generation)
+            self.status_bar.showMessage(
+                "Sin conexión — mostrando la copia guardada del mensaje"
+            )
+            return
+
+        if generation != self._fetch_generation:
+            return
+        self._pending_fetch_uid = None
+        summary = next((m for m in self._all_messages if m.uid == uid), None)
+        self.subject_label.setText(summary.subject if summary else "Mensaje no descargado")
+        self.meta_label.setText(summary.sender if summary else "")
+        self.message_viewer.show_plain(
+            "Este mensaje todavía no está descargado y no hay conexión con el "
+            "servidor.\n\nPulsa «Reintentar» en el aviso de conexión o «Actualizar» "
+            "para volver a conectar y descargarlo."
+        )
+        self._update_message_actions()
+        self.status_bar.showMessage("Sin conexión: el mensaje no está en la caché local")
+
     def _prefetch_message(self, uid: str) -> None:
         """Precarga en caché el siguiente mensaje de la lista."""
-        if not self.mail_cache or not self.current_account:
+        if not self.mail_cache or not self.current_account or not self.mail_service:
             return
         if self.mail_cache.load_message_body(
             self.current_account.id, self._current_folder, uid
@@ -3914,6 +4424,12 @@ class MainWindow(QMainWindow):
         name = name.strip()
         if not name:
             QMessageBox.warning(self, title, "Indica un nombre para la carpeta.")
+            return
+        sep = self._folder_delimiter()
+        if sep in name or "/" in name:
+            QMessageBox.warning(
+                self, title, f"El nombre no puede contener «{sep}»."
+            )
             return
         self.status_bar.showMessage(f"Creando carpeta «{name}»…")
         worker = CreateFolderWorker(self.mail_service, name, parent)
@@ -4413,12 +4929,32 @@ class MainWindow(QMainWindow):
             or self._current_folder
             or "INBOX"
         )
-        if folder and self.mail_service:
+        if self.mail_service:
             if selected_folder_path(self.folder_tree) != folder:
                 self._refresh_folder_tree(select_folder=folder)
             self._start_folder_sync(folder, manual_refresh=True)
-        elif self.current_account:
-            self._connect_account(self.current_account)
+            return
+        if self.current_account:
+            self._current_folder = folder
+            self._pending_manual_refresh = True
+            if self._connection_status == "connecting":
+                self.status_bar.showMessage(
+                    f"Ya se está conectando a {self.current_account.email}… "
+                    "se buscará correo nuevo en cuanto responda el servidor"
+                )
+                return
+            self.status_bar.showMessage(
+                f"Reconectando con {self.current_account.email} para buscar correo nuevo…"
+            )
+            self._connect_account(
+                self.current_account, block_ui=False, preload_cache=False
+            )
+            return
+        QMessageBox.information(
+            self,
+            "Sin cuentas",
+            "Añade una cuenta de correo antes de actualizar.",
+        )
 
     def _compose(self, draft: ComposeDraft | None = None, title: str = "Redactar correo") -> None:
         if not self.mail_service:

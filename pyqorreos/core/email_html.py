@@ -75,20 +75,25 @@ def apply_viewer_theme_styles(
     style_block = (
         f"<style type='text/css' id='pyqorreos-viewer-theme'>{css}</style>"
     )
-    if _PYQ_VIEWER_THEME_STYLE.search(html):
-        return _PYQ_VIEWER_THEME_STYLE.sub(style_block, html, count=1)
+    # Quita bloques previos para no acumular reglas al cambiar de tema/modo.
+    html = _PYQ_VIEWER_THEME_STYLE.sub("", html)
+
+    # Al final del body: así gana a <style> del propio correo (muy habitual
+    # en newsletters) que, si van después del </head>, anularían el tema.
+    if _HAS_BODY_CLOSE.search(html):
+        return _HAS_BODY_CLOSE.sub(f"{style_block}</body>", html, count=1)
     if _HAS_HEAD_CLOSE.search(html):
         return _HAS_HEAD_CLOSE.sub(f"{style_block}</head>", html, count=1)
     if _HAS_HTML_TAG.search(html):
         return _HAS_HTML_TAG.sub(
-            rf"<html\1><head><meta charset='utf-8'>{style_block}</head>",
+            rf"<html\1><head><meta charset='utf-8'></head>"
+            rf"<body>{style_block}",
             html,
             count=1,
-            flags=re.IGNORECASE,
         )
     return (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        f"{style_block}</head><body>{html}</body></html>"
+        "<!DOCTYPE html><html><head><meta charset='utf-8'></head>"
+        f"<body>{html}{style_block}</body></html>"
     )
 
 _CID_IN_ATTR = re.compile(
@@ -115,9 +120,10 @@ _BLOCKED_CSS_URL = re.compile(
     rf'url\(\s*["\']?{re.escape(_BLOCKED_IMG_PLACEHOLDER)}["\']?\s*\)\s*/\*\s*pyqorreos-blocked:([^*]+?)\s*\*/',
     re.IGNORECASE,
 )
-_HAS_HTML_TAG = re.compile(r"<html[\s>]", re.IGNORECASE)
+_HAS_HTML_TAG = re.compile(r"<html([\s>])", re.IGNORECASE)
 _HAS_HEAD_CLOSE = re.compile(r"</head>", re.IGNORECASE)
 _HAS_BODY_TAG = re.compile(r"<body[\s>]", re.IGNORECASE)
+_HAS_BODY_CLOSE = re.compile(r"</body>", re.IGNORECASE)
 _PYQ_VIEWER_THEME_STYLE = re.compile(
     r"""<style[^>]*\bid=["']pyqorreos-viewer-theme["'][^>]*>.*?</style>""",
     re.IGNORECASE | re.DOTALL,

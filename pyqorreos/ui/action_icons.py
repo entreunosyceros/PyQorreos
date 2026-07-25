@@ -13,7 +13,9 @@ _UI_IMG = Path(__file__).resolve().parent.parent / "img" / "ui"
 _FOLDERS_IMG = Path(__file__).resolve().parent.parent / "img" / "folders"
 
 # Claves que reutilizan iconos de carpetas IMAP.
-_FOLDER_ICON_KEYS = frozenset({"inbox", "trash", "spam", "folder"})
+_FOLDER_ICON_KEYS = frozenset(
+    {"inbox", "trash", "spam", "folder", "archive", "drafts", "sent"}
+)
 
 
 @lru_cache(maxsize=32)

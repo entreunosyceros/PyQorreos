@@ -89,6 +89,11 @@ class OpenPgpSettings:
     signing_key_id: str = ""
     cache_decrypted_bodies: bool = True
 
+# Último error al inicializar GnuPG; evita mensajes vacíos si el binario existe
+# pero gnupg.GPG() falla (permisos de ~/.gnupg, gpg-agent caído, versión rara…).
+_last_gpg_error = ""
+
+
 def gpg_binary_available() -> bool:
     return bool(shutil.which("gpg"))
 
@@ -100,7 +105,12 @@ def openpgp_unavailable_reason() -> str:
         return "Falta el paquete Python «python-gnupg». Instálalo con pip."
     if not gpg_binary_available():
         return "No se encontró el programa «gpg» (GnuPG) en el sistema."
-    return ""
+    if _last_gpg_error:
+        return _last_gpg_error
+    return (
+        "No se pudo inicializar GnuPG. Comprueba que «gpg» funciona en la terminal "
+        "y que tienes permisos sobre el directorio de claves."
+    )
 
 def gnupg_home(use_system: bool) -> Path:
     if use_system:
@@ -111,15 +121,19 @@ def gnupg_home(use_system: bool) -> Path:
 
 
 def get_gpg(use_system_home: bool = False) -> Any | None:
+    global _last_gpg_error
     if not openpgp_available():
         return None
     assert gnupg is not None
-    home = gnupg_home(use_system_home)
-    home.mkdir(parents=True, exist_ok=True)
     try:
-        return gnupg.GPG(gnupghome=str(home), gpgbinary=shutil.which("gpg") or "gpg")
-    except (FileNotFoundError, OSError):
+        home = gnupg_home(use_system_home)
+        home.mkdir(parents=True, exist_ok=True)
+        gpg = gnupg.GPG(gnupghome=str(home), gpgbinary=shutil.which("gpg") or "gpg")
+    except Exception as exc:  # gnupg lanza OSError, ValueError o RuntimeError
+        _last_gpg_error = f"No se pudo inicializar GnuPG: {exc}".strip().rstrip(":")
         return None
+    _last_gpg_error = ""
+    return gpg
 
 
 def _mime_protocol(msg: Message) -> str:
@@ -483,44 +497,53 @@ def encrypt_outgoing_message(
         return data.encode("utf-8")
     return bytes(data)
 
-def list_public_keys(use_system_home: bool = False) -> list[dict[str, str]]:
+def _key_entries(secret: bool, use_system_home: bool) -> list[dict[str, str]]:
+    """Lista claves sin propagar fallos de gpg a la interfaz."""
     gpg = get_gpg(use_system_home)
     if gpg is None:
         return []
+    try:
+        raw_keys = gpg.list_keys(secret=secret)
+    except Exception:
+        return []
     keys: list[dict[str, str]] = []
-    for key in gpg.list_keys():
-        keys.append(
-            {
-                "keyid": key.get("keyid", ""),
-                "fingerprint": key.get("fingerprint", ""),
-                "uids": ", ".join(key.get("uids", [])),
-                "expires": key.get("expires", ""),
-            }
-        )
+    for key in raw_keys or []:
+        entry = {
+            "keyid": str(key.get("keyid", "") or ""),
+            "fingerprint": str(key.get("fingerprint", "") or ""),
+            "uids": ", ".join(key.get("uids", []) or []),
+        }
+        if not secret:
+            entry["expires"] = str(key.get("expires", "") or "")
+        keys.append(entry)
     return keys
 
+
+def list_public_keys(use_system_home: bool = False) -> list[dict[str, str]]:
+    return _key_entries(secret=False, use_system_home=use_system_home)
+
 def list_secret_keys(use_system_home: bool = False) -> list[dict[str, str]]:
-    gpg = get_gpg(use_system_home)
-    if gpg is None:
-        return []
-    keys: list[dict[str, str]] = []
-    for key in gpg.list_keys(secret=True):
-        keys.append(
-            {
-                "keyid": key.get("keyid", ""),
-                "fingerprint": key.get("fingerprint", ""),
-                "uids": ", ".join(key.get("uids", [])),
-            }
-        )
-    return keys
+    return _key_entries(secret=True, use_system_home=use_system_home)
 
 def import_key_file(path: str, use_system_home: bool = False) -> tuple[int, str]:
     gpg = get_gpg(use_system_home)
     if gpg is None:
         return 0, openpgp_unavailable_reason()
-    result = gpg.import_keys(Path(path).read_text(encoding="utf-8", errors="replace"))
+    try:
+        armor = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return 0, f"No se pudo leer el archivo de clave: {exc}"
+    if not armor.strip():
+        return 0, "El archivo de clave está vacío"
+    try:
+        result = gpg.import_keys(armor)
+    except Exception as exc:
+        return 0, f"GnuPG no pudo importar la clave: {exc}"
     count = int(getattr(result, "count", 0) or 0)
     if count <= 0:
+        detail = str(getattr(result, "stderr", "") or "").strip()
+        if detail:
+            return 0, f"No se importó ninguna clave: {detail.splitlines()[-1]}"
         return 0, "No se importó ninguna clave"
     return count, ""
 

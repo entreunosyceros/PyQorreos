@@ -166,7 +166,17 @@ def friendly_mail_error(exc: BaseException, *, email: str = "") -> str:
     if isinstance(exc, OSError):
         if "network is unreachable" in lowered:
             return "Sin conexión de red. Comprueba tu Internet."
-        if "name or service not known" in lowered or "nodename nor servname" in lowered:
+        if any(
+            token in lowered
+            for token in (
+                "name or service not known",
+                "nodename nor servname",
+                "nombre o servicio desconocido",
+                "nombre o servicio no conocido",
+                "temporary failure in name resolution",
+                "fallo temporal en la resolución",
+            )
+        ):
             return "No se encontró el servidor. Revisa el nombre del host IMAP/SMTP."
         if "timed out" in lowered:
             return "Tiempo de espera agotado. La red puede ser lenta o el servidor no responde."

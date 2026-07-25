@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.core.message_attachments import MailAttachmentInfo
+from pyqorreos.ui.action_icons import action_icon
 
 
 class AttachmentPanel(QWidget):
@@ -32,12 +33,15 @@ class AttachmentPanel(QWidget):
         layout.addWidget(self._title)
         row = QHBoxLayout()
         self.list = QListWidget()
+        self.list.setAccessibleName("Adjuntos del mensaje")
         self.list.setMaximumHeight(72)
         self.list.setVisible(False)
         row.addWidget(self.list, 1)
         btn_col = QVBoxLayout()
         self.btn_open = QPushButton("Abrir…")
         self.btn_save = QPushButton("Guardar…")
+        self.btn_open.setIcon(action_icon("attachment"))
+        self.btn_save.setIcon(action_icon("move"))
         self.btn_open.clicked.connect(self._on_open)
         self.btn_save.clicked.connect(self._on_save)
         self.btn_open.setVisible(False)
@@ -62,7 +66,9 @@ class AttachmentPanel(QWidget):
         self.btn_save.setVisible(True)
         for index, att in enumerate(self._attachments):
             size_kb = max(1, att.size // 1024)
-            item = QListWidgetItem(f"📎 {att.filename} ({size_kb} KB)")
+            item = QListWidgetItem(
+                action_icon("attachment"), f"{att.filename} ({size_kb} KB)"
+            )
             item.setData(256, index)
             self.list.addItem(item)
         if visible:

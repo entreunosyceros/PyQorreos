@@ -39,9 +39,15 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - **Al iniciar la aplicación**: muestra la caché local de la **última carpeta** usada, el **árbol de carpetas** de la última sesión y descarga cabeceras nuevas del servidor en segundo plano
 - **Retoma la última carpeta** abierta por cuenta al volver a conectar
 - Indicador permanente de **estado de conexión** en la barra de estado (sin conexión, conectado, sincronizando…)
-- Árbol de carpetas con iconos SVG y contador de no leídos
+- **Modo sin conexión**: si el servidor no responde, PyQorreos sigue siendo utilizable con la caché local. Puedes cambiar de carpeta y **abrir con doble clic** cualquier mensaje ya descargado; los que no estén en caché lo indican en el panel de lectura
+- Aviso **no bloqueante** cuando la conexión falla o tarda demasiado (indica el servidor IMAP afectado) con botones **Reintentar** y **Editar cuenta**
+- **Actualizar** (`F5`) vuelve a conectar automáticamente si la sesión IMAP se había perdido y busca correo nuevo en cuanto responde el servidor
+- **Árbol con todas las cuentas**: cada cuenta configurada es un nodo desplegable con sus propias carpetas, y la activa se resalta en negrita. Al pulsar una carpeta de otra cuenta, PyQorreos cambia a ella y la abre
+- Las cuentas no activas muestran sus carpetas y totales desde la **caché local**, sin necesidad de abrir una sesión IMAP para cada una
+- Árbol de carpetas con iconos SVG y contador de mensajes; el despliegue que elijas se conserva mientras trabajas
+- **Anidado según el servidor**: se respeta el separador real de cada servidor (`/` en Gmail o Exchange, `.` en Dovecot y cPanel), así que `INBOX.Archive.2024` se muestra anidado en lugar de plano
 - Crear carpetas y subcarpetas en el servidor IMAP; eliminar carpetas de usuario (p. ej. restos de otros clientes como `Mailspring`)
-- **Renombrar carpetas** de usuario (menú contextual, doble clic o `F2`); las carpetas del sistema (INBOX, Enviados, Papelera…) están protegidas
+- **Renombrar carpetas** de usuario **de cualquier cuenta** (menú contextual, doble clic o `F2`); si la carpeta es de una cuenta inactiva, PyQorreos cambia a ella primero. Las carpetas del sistema (INBOX, Enviados, Papelera…) están protegidas, también en servidores que las nombran `INBOX.Drafts` o `INBOX.Trash`
 - Sincronización incremental (solo descarga mensajes nuevos)
 - Sincronización en segundo plano (IMAP IDLE + polling) configurable en preferencias (por defecto cada 15 minutos)
 - Caché local SQLite para abrir la bandeja al instante

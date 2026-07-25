@@ -6,6 +6,31 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ---
 
+## Árbol multicuenta y carpetas por servidor (reciente)
+
+- **Todas las cuentas en el árbol**: cada cuenta configurada es un nodo raíz desplegable con sus carpetas; la activa va en negrita. Pulsar una carpeta de otra cuenta cambia a esa cuenta y la abre.
+- Las cuentas inactivas se pintan desde la **caché local** (carpetas y totales), sin abrir una sesión IMAP por cuenta, y el despliegue elegido se conserva entre repintados.
+- **Renombrar carpetas de cualquier cuenta**: si la carpeta no es de la cuenta activa, PyQorreos cambia a ella y abre el diálogo al conectarse.
+- **Separador IMAP real**: se lee de la respuesta `LIST` y se respeta al construir el árbol y al crear, renombrar o eliminar. Antes todo asumía `/`, así que en servidores Dovecot/cPanel las subcarpetas salían planas y renombrar `INBOX.Trabajo` sacaba la carpeta fuera de `INBOX`.
+- Las carpetas del sistema con nombres tipo `INBOX.Drafts` o `INBOX.Trash` quedan protegidas frente a renombrado y borrado.
+- El diálogo de renombrado ya no propone el nombre en minúsculas.
+- Un nivel intermedio que el servidor no lista como carpeta real solo agrupa visualmente y ya no se puede pulsar (antes daba error al abrirlo).
+
+## Robustez de OpenPGP (reciente)
+
+- Si GnuPG está instalado pero no se puede inicializar (permisos del llavero, `gpg-agent` caído…), los errores dejan de mostrarse **vacíos**: se indica la causa concreta.
+- Importar una clave informa del motivo real cuando falla (archivo ilegible, vacío o rechazado por GnuPG) en lugar de un mensaje genérico.
+- Listar claves públicas o privadas ya no puede propagar una excepción de `gpg` a la interfaz.
+
+## Modo sin conexión y rendimiento de la lista (reciente)
+
+- **Leer correo sin conexión**: el doble clic (y `Intro`) abre el mensaje desde la caché local aunque la sesión IMAP haya fallado; antes no ocurría nada. Si el cuerpo no está descargado, el panel de lectura lo explica en vez de quedarse en blanco.
+- **Navegación entre carpetas sin conexión**: al pulsar una carpeta se carga su contenido guardado sin intentar sincronizar.
+- **Actualizar (`F5`) reconecta**: si la sesión IMAP se había perdido, vuelve a conectar y busca correo nuevo en la carpeta activa en cuanto responde el servidor. Pulsarlo durante una conexión en curso ya no reinicia el intento.
+- Aviso **no bloqueante** cuando el servidor tarda en responder, indicando el host IMAP afectado; la resolución DNS puede tardar más que el tiempo de espera del socket, así que el aviso no cancela el intento.
+- Listado más rápido: la fuente en negrita y los pinceles de color se calculan una sola vez por repintado, los contadores de categoría se obtienen en una sola pasada y cambiar de página ya no recalcula el filtro dos veces.
+- Corregida la variable de entorno `QSG_RHI_BACKEND=software` (valor inexistente en Qt) por `QT_QUICK_BACKEND=software`, que sí fuerza el renderizado por software.
+
 ## Documentación integrada (reciente)
 
 - Nuevo visor **Ayuda → Documentación** (`F1`): muestra el README y todas las guías de `docs/` dentro de la app, con índice navegable, navegación por enlaces internos, botón **Atrás** y búsqueda en la página. Ventana no modal y botón **Ver en GitHub**. El paquete `.deb` ahora incluye la carpeta `docs/`.

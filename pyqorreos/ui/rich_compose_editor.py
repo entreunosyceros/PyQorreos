@@ -4,7 +4,7 @@ Editor de texto enriquecido para redactar correos.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.ui.spell_check import ComposeSpellChecker, SpellCheckTextEdit, SpellLanguage
+from pyqorreos.ui.action_icons import action_icon
 from pyqorreos.ui.theme import apply_compose_editor_theme, resolve_theme_from_parent
 
 
@@ -55,6 +56,8 @@ class RichComposeEditor(QWidget):
         self.toolbar = QToolBar("Formato")
         self.toolbar.setMovable(False)
         self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.toolbar.setIconSize(QSize(17, 17))
+        self.toolbar.setAccessibleName("Herramientas de formato")
         layout.addWidget(self.toolbar)
 
         spell_row = QHBoxLayout()
@@ -67,6 +70,7 @@ class RichComposeEditor(QWidget):
         self.spell_lang_combo.setToolTip(
             "Idioma del corrector ortográfico mientras escribes"
         )
+        self.spell_lang_combo.setAccessibleName("Idioma del corrector ortográfico")
         self.spell_lang_combo.currentIndexChanged.connect(self._on_spell_language_changed)
         spell_row.addWidget(self.spell_lang_combo)
         spell_row.addStretch(1)
@@ -81,6 +85,7 @@ class RichComposeEditor(QWidget):
             )
         self.editor.setAcceptRichText(True)
         self.editor.setPlaceholderText("Escribe tu mensaje aquí…")
+        self.editor.setAccessibleName("Cuerpo del correo")
         self.editor.setMinimumHeight(220)
         layout.addWidget(self.editor)
 
@@ -135,12 +140,12 @@ class RichComposeEditor(QWidget):
 
         self.toolbar.addSeparator()
 
-        link_action = QAction("🔗 Enlace", self)
+        link_action = QAction(action_icon("link"), "Enlace", self)
         link_action.setToolTip("Insertar o editar enlace")
         link_action.triggered.connect(self._insert_link)
         self.toolbar.addAction(link_action)
 
-        image_action = QAction("🖼 Imagen", self)
+        image_action = QAction(action_icon("image"), "Imagen", self)
         image_action.setToolTip("Insertar imagen en el cuerpo")
         image_action.triggered.connect(self._insert_image)
         self.toolbar.addAction(image_action)

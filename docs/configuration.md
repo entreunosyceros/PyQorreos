@@ -70,6 +70,22 @@ El `refresh_token` se guarda en el llavero de forma permanente; el `access_token
 - La caché local permite ver la bandeja **antes** de que termine la conexión.
 - La **barra de progreso** bajo la lista solo aparece cuando hay mensajes nuevos que descargar; el estado de red (conectado, sincronizando…) se muestra de forma permanente a la derecha de la barra de estado.
 
+### Cuando el servidor no responde
+
+Un fallo de DNS o de red **no bloquea** la aplicación:
+
+- Aparece un aviso en la parte superior del panel de lectura con el **host IMAP** que ha fallado y botones **Reintentar** y **Editar cuenta**.
+- La lista de mensajes sigue mostrando la caché local y puedes **cambiar de carpeta** y **abrir mensajes con doble clic** si su cuerpo ya estaba descargado.
+- Si el cuerpo no está en caché, el panel de lectura lo indica en lugar de quedarse en blanco.
+- **Actualizar** (`F5`) reconecta y, en cuanto el servidor responde, busca correo nuevo en la carpeta que estabas viendo.
+- Como la resolución DNS puede tardar mucho más que el tiempo de espera del socket IMAP, el aviso también aparece si la conexión se alarga, sin cancelar el intento en curso.
+
+Si el problema persiste, comprueba la resolución del host desde la terminal:
+
+```bash
+getent hosts imap.tuservidor.com
+```
+
 ### Traducción
 
 - La **traducción** solo se ejecuta al pulsar «Traducir»; el texto se envía a un servicio en línea gratuito ([deep-translator](https://github.com/nidhaloff/deep-translator)).
@@ -94,8 +110,20 @@ El `refresh_token` se guarda en el llavero de forma permanente; el `access_token
 
 ### Carpetas IMAP
 
+- El árbol de la izquierda muestra **todas las cuentas configuradas**. Cada cuenta es un nodo desplegable con sus propias carpetas; la cuenta activa aparece en **negrita**.
+- Al pulsar una carpeta de otra cuenta, PyQorreos **cambia a esa cuenta** y abre la carpeta. El estado de despliegue se conserva mientras trabajas.
+- Las cuentas que no están activas muestran las carpetas y los totales **guardados en la caché local**, así que el árbol está completo aunque solo haya una sesión IMAP abierta.
 - Si en Gmail aparece una carpeta **Mailspring** (u otra de un cliente antiguo), puedes eliminarla con clic derecho en el árbol → **Eliminar carpeta…** (las carpetas del sistema como INBOX o `[Gmail]/…` están protegidas).
 - **Renombrar una carpeta** de usuario: clic derecho en el árbol → **Renombrar carpeta…**, **doble clic** sobre ella o tecla **`F2`**. Se renombra en el servidor y se actualiza la caché local (incluidas las subcarpetas). Las carpetas del sistema no se pueden renombrar.
+- Puedes renombrar carpetas de **cualquier cuenta**: si la carpeta pertenece a una cuenta que no está activa, PyQorreos cambia primero a esa cuenta y abre el diálogo al conectarse.
+
+#### Separador de carpetas del servidor
+
+No todos los servidores anidan las carpetas igual: Gmail y Exchange usan `/` (`INBOX/Trabajo`) y Dovecot o cPanel usan `.` (`INBOX.Trabajo`). PyQorreos lee el separador de la respuesta `LIST` del servidor y lo respeta al crear, renombrar y eliminar. Por eso:
+
+- Renombrar `INBOX.Trabajo` como «Proyectos» produce `INBOX.Proyectos`, sin sacar la carpeta de INBOX.
+- El nombre nuevo no puede contener el separador del servidor; PyQorreos avisa indicando cuál es.
+- En el árbol, un nivel intermedio que el servidor no lista como carpeta real solo agrupa visualmente y no se puede abrir.
 
 ### Búsqueda, destacados y borradores
 

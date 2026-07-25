@@ -71,7 +71,9 @@ class ConnectWorker(QThread):
             self.signals.finished.emit(names)
         except Exception as exc:
             if not self._cancelled:
-                self.signals.error.emit(friendly_mail_error(exc))
+                self.signals.error.emit(
+                    friendly_mail_error(exc, email=self.account.email)
+                )
         finally:
             service.disconnect()
 

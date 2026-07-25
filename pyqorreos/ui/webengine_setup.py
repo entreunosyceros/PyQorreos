@@ -114,9 +114,10 @@ def configure_webengine_environment() -> None:
             existing.append(flag)
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(existing).strip()
 
-    # Backend software para Qt Quick / RHI si OpenGL no está disponible.
+    # Backend software para Qt Quick si OpenGL no está disponible.
+    # QSG_RHI_BACKEND no acepta "software": el valor equivalente es QT_QUICK_BACKEND.
     # No sobrescribe un valor explícito del usuario.
-    os.environ.setdefault("QSG_RHI_BACKEND", "software")
+    os.environ.setdefault("QT_QUICK_BACKEND", "software")
     os.environ.setdefault("QT_OPENGL", "software")
 
     rules = os.environ.get("QT_LOGGING_RULES", "")

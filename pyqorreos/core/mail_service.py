@@ -108,6 +108,27 @@ class MailFolder:
     flags: tuple[str, ...] = ()
 
 
+# Respuesta LIST: (\HasNoChildren) "." "INBOX.Archive"
+_LIST_LINE = re.compile(r'^\((?P<flags>[^)]*)\)\s+(?P<delim>"[^"]*"|NIL)\s+', re.I)
+
+
+def _parse_list_delimiter(line: str) -> str:
+    match = _LIST_LINE.match(line.strip())
+    if not match:
+        return "/"
+    raw = match.group("delim")
+    if raw.upper() == "NIL":
+        return "/"
+    return raw.strip('"') or "/"
+
+
+def _parse_list_flags(line: str) -> tuple[str, ...]:
+    match = _LIST_LINE.match(line.strip())
+    if not match:
+        return ()
+    return tuple(flag for flag in match.group("flags").split() if flag)
+
+
 @dataclass
 class MailSummary:
     uid: str
@@ -335,6 +356,7 @@ class MailService:
         self.account = account
         self.password = password
         self.classifier = classifier or MailClassifier()
+        self._folder_delimiter = ""
         self._imap: imaplib.IMAP4_SSL | imaplib.IMAP4 | None = None
         self._imap_thread_id: int | None = None
         self._current_folder = "INBOX"
@@ -479,8 +501,40 @@ class MailService:
             parts = line.rsplit(" ", 1)
             if len(parts) >= 2:
                 name = parts[-1].strip().strip('"')
-                folders.append(MailFolder(name=name))
-        return folders or [MailFolder(name="INBOX")]
+                folders.append(
+                    MailFolder(
+                        name=name,
+                        delimiter=_parse_list_delimiter(line),
+                        flags=_parse_list_flags(line),
+                    )
+                )
+        if not folders:
+            return [MailFolder(name="INBOX")]
+        inbox = next((f for f in folders if f.name.upper() == "INBOX"), folders[0])
+        self._folder_delimiter = inbox.delimiter or "/"
+        return folders
+
+    def cached_folder_delimiter(self) -> str:
+        """Separador ya conocido, o cadena vacía si aún no se ha hecho LIST."""
+        return self._folder_delimiter
+
+    def folder_delimiter(self) -> str:
+        """
+        Separador jerárquico del servidor: «/» en Gmail, «.» en Dovecot.
+
+        Puede hacer un LIST contra el servidor, así que solo debe llamarse
+        desde hilos de trabajo, nunca desde la interfaz.
+        """
+        if not self._folder_delimiter:
+            try:
+                self.list_folders()
+            except Exception:
+                return "/"
+        return self._folder_delimiter or "/"
+
+    def _folder_names_and_delimiter(self) -> tuple[list[str], str]:
+        entries = self.list_folders()
+        return [f.name for f in entries], self._folder_delimiter or "/"
 
     def select_folder(self, folder: str) -> int:
         with self._imap_lock:
@@ -1217,12 +1271,15 @@ class MailService:
 
     def create_folder(self, name: str, parent: str | None = None) -> str:
         """Crea una carpeta IMAP y devuelve su ruta completa."""
-        part = name.strip().strip("/")
+        sep = self.folder_delimiter()
+        part = name.strip().strip("/").strip(sep)
         if not part:
             raise ValueError("El nombre de la carpeta no puede estar vacío")
-        if "/" in part or part in (".", ".."):
-            raise ValueError("Nombre de carpeta no válido")
-        full_path = f"{parent}/{part}" if parent else part
+        if "/" in part or sep in part or part in (".", ".."):
+            raise ValueError(
+                f"Nombre de carpeta no válido: no puede contener «{sep}»"
+            )
+        full_path = f"{parent}{sep}{part}" if parent else part
         with self._imap_lock:
             self._ensure_connected_unlocked()
             imap = self._require_imap()
@@ -1255,8 +1312,8 @@ class MailService:
         if is_protected_folder(path):
             raise ValueError(f"La carpeta «{path}» es del sistema y no se puede eliminar")
 
-        all_names = [f.name for f in self.list_folders()]
-        descendants = folder_descendants(all_names, path)
+        all_names, sep = self._folder_names_and_delimiter()
+        descendants = folder_descendants(all_names, path, sep)
         if descendants and not recursive:
             sample = ", ".join(descendants[:3])
             extra = "…" if len(descendants) > 3 else ""
@@ -1265,7 +1322,7 @@ class MailService:
                 "Confirma la eliminación recursiva para borrarlas también."
             )
 
-        targets = sorted({path, *descendants}, key=lambda p: (-p.count("/"), p))
+        targets = sorted({path, *descendants}, key=lambda p: (-p.count(sep), p))
         deleted: list[str] = []
 
         with self._imap_lock:
@@ -1296,7 +1353,7 @@ class MailService:
                 deleted.append(target)
 
         if self._current_folder in deleted or any(
-            self._current_folder.startswith(d + "/") for d in deleted
+            self._current_folder.startswith(d + sep) for d in deleted
         ):
             self._current_folder = "INBOX"
         return deleted
@@ -1318,22 +1375,27 @@ class MailService:
                 f"La carpeta «{path}» es del sistema y no se puede renombrar"
             )
 
-        leaf = new_name.strip().strip("/")
+        all_names, sep = self._folder_names_and_delimiter()
+
+        leaf = new_name.strip().strip("/").strip(sep)
         if not leaf:
             raise ValueError("El nombre de la carpeta no puede estar vacío")
-        if "/" in leaf or leaf in (".", ".."):
-            raise ValueError("Nombre de carpeta no válido")
+        if "/" in leaf or sep in leaf or leaf in (".", ".."):
+            raise ValueError(
+                f"Nombre de carpeta no válido: no puede contener «{sep}»"
+            )
 
-        parent = path.rsplit("/", 1)[0] if "/" in path else ""
-        new_path = f"{parent}/{leaf}" if parent else leaf
+        # Conserva la carpeta padre: renombrar INBOX.Trabajo no debe sacarla
+        # de INBOX en servidores con separador «.».
+        parent = path.rsplit(sep, 1)[0] if sep in path else ""
+        new_path = f"{parent}{sep}{leaf}" if parent else leaf
         if new_path == path:
             return []
 
-        all_names = [f.name for f in self.list_folders()]
         if new_path in all_names:
             raise RuntimeError(f"Ya existe una carpeta «{new_path}»")
 
-        descendants = folder_descendants(all_names, path)
+        descendants = folder_descendants(all_names, path, sep)
 
         with self._imap_lock:
             self._ensure_connected_unlocked()
@@ -1359,7 +1421,7 @@ class MailService:
         for child in descendants:
             mapping.append((child, new_path + child[len(path):]))
 
-        if self._current_folder == path or self._current_folder.startswith(path + "/"):
+        if self._current_folder == path or self._current_folder.startswith(path + sep):
             self._current_folder = new_path + self._current_folder[len(path):]
         return mapping
 

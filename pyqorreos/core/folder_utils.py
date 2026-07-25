@@ -57,6 +57,9 @@ class FolderTreeNode:
     full_path: str
     children: list[FolderTreeNode] = field(default_factory=list)
     unread: int = 0
+    # False en nodos intermedios que el servidor no lista como carpeta real
+    # (agrupan visualmente, pero no se pueden abrir).
+    exists: bool = True
 
 
 def folder_leaf(name: str) -> str:
@@ -76,15 +79,24 @@ def is_protected_folder(name: str) -> bool:
         return True
     if any(lower.startswith(prefix) for prefix in _PROTECTED_PREFIXES):
         return True
-    return folder_leaf(path) in _SYSTEM_LEAF_NAMES
+    if folder_leaf(path) in _SYSTEM_LEAF_NAMES:
+        return True
+    # Dovecot/cPanel anidan con «.»: INBOX.Drafts, INBOX.Trash, INBOX.Sent…
+    if lower.startswith("inbox."):
+        segments = lower.split(".")
+        return len(segments) == 2 and segments[1] in _SYSTEM_LEAF_NAMES
+    return False
 
 
 def can_delete_folder(name: str) -> bool:
     return not is_protected_folder(name)
 
 
-def folder_descendants(folders: list[str], folder: str) -> list[str]:
-    prefix = folder.rstrip("/") + "/"
+def folder_descendants(
+    folders: list[str], folder: str, delimiter: str = "/"
+) -> list[str]:
+    sep = delimiter or "/"
+    prefix = folder.rstrip(sep) + sep
     return sorted(f for f in folders if f.startswith(prefix))
 
 
@@ -156,38 +168,64 @@ def find_archive_folder(folders: list[str]) -> str | None:
     return None
 
 
+def detect_folder_delimiter(folders: list[str]) -> str:
+    """
+    Deduce el separador jerárquico a partir de los nombres de carpeta.
+
+    Dovecot/cPanel usan «.» (`INBOX.Archive`) y Gmail o Exchange usan «/».
+    Solo se acepta «.» si el primer segmento existe como carpeta real, para no
+    partir nombres que simplemente contienen un punto (p. ej. «web.dev»).
+    """
+    names = [name for name in folders if name]
+    if any("/" in name for name in names):
+        return "/"
+    lowered = {name.lower() for name in names}
+    for name in names:
+        if "." not in name:
+            continue
+        head = name.split(".", 1)[0].lower()
+        if head and head != name.lower() and head in lowered:
+            return "."
+    return "/"
+
+
 def build_folder_tree(
-    folders: list[str], unread_map: dict[str, int] | None = None
+    folders: list[str],
+    unread_map: dict[str, int] | None = None,
+    delimiter: str | None = None,
 ) -> list[FolderTreeNode]:
-    """Construye un árbol a partir de rutas con delimitador /."""
+    """Construye un árbol a partir de rutas jerárquicas del servidor IMAP."""
     unread_map = unread_map or {}
-    roots: dict[str, FolderTreeNode] = {}
+    sep = delimiter or detect_folder_delimiter(folders)
+    real_paths = {name for name in folders if name}
+    nodes: dict[str, FolderTreeNode] = {}
     order: list[str] = []
 
-    def get_node(path: str) -> FolderTreeNode:
-        if path not in roots:
-            parts = path.split("/")
-            roots[path] = FolderTreeNode(
-                name=parts[-1],
+    def get_node(path: str, name: str) -> FolderTreeNode:
+        if path not in nodes:
+            nodes[path] = FolderTreeNode(
+                name=name,
                 full_path=path,
                 unread=unread_map.get(path, 0),
+                exists=path in real_paths,
             )
             order.append(path)
-        return roots[path]
+        return nodes[path]
 
-    for folder in sorted(folders, key=lambda f: f.upper()):
-        parts = folder.split("/")
+    for folder in sorted(real_paths, key=lambda f: f.upper()):
+        parts = [part for part in folder.split(sep) if part]
+        if not parts:
+            continue
         for i in range(len(parts)):
-            path = "/".join(parts[: i + 1])
-            node = get_node(path)
+            path = sep.join(parts[: i + 1])
+            node = get_node(path, parts[i])
             if i > 0:
-                parent_path = "/".join(parts[:i])
-                parent = get_node(parent_path)
+                parent = get_node(sep.join(parts[:i]), parts[i - 1])
                 if node not in parent.children:
                     parent.children.append(node)
 
-    top_level = [roots[p] for p in order if "/" not in p]
-    for node in roots.values():
+    top_level = [nodes[p] for p in order if sep not in p]
+    for node in nodes.values():
         node.children.sort(key=lambda n: n.name.upper())
     return sorted(top_level, key=lambda n: n.name.upper())
 
