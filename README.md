@@ -1,16 +1,17 @@
 <p align="center">
 <img width="640" height="349" alt="logo" src="https://github.com/user-attachments/assets/d38d4720-9b19-4f37-93d4-d9c9c4fce698" />
-</p>
-
-# PyQorreos V.0.1.1
-
+  
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python&logoColor=white)
 ![PySide6](https://img.shields.io/badge/UI-PySide6-green?style=flat-square&logo=qt&logoColor=white)
 ![License](https://img.shields.io/badge/License-GPL--3.0-blue?style=flat-square)
 
+</p>
+
+# PyQorreos V.0.1.1
+
 <div align="center">
 
-<img width="451" height="733" alt="about-PyQorreo" src="https://github.com/user-attachments/assets/435c73a7-c688-45ab-ba8e-54084536df76" />
+<img width="1919" height="1049" alt="about-pyqorreos" src="https://github.com/user-attachments/assets/f55ff758-0b0f-4e81-b573-2bc65b91b5ee" />
 
 </div>
 
