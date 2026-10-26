@@ -1,4 +1,6 @@
+<p align="center">
 <img width="640" height="349" alt="logo" src="https://github.com/user-attachments/assets/d38d4720-9b19-4f37-93d4-d9c9c4fce698" />
+</p>
 
 # PyQorreos V.0.1.1
 
