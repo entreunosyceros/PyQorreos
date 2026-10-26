@@ -7,6 +7,7 @@ Incluye editor enriquecido, adjuntos, firma y guardado de borradores.
 from __future__ import annotations
 
 import html as html_module
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -29,9 +30,22 @@ from PySide6.QtWidgets import (
 )
 
 from pyqorreos.core.account import is_microsoft_email
+from pyqorreos.ui.flow_layout import (
+    FlowLayout,
+    enable_height_for_width,
+    flow_button,
+    flow_field,
+    scrolling_body,
+    wrapping_combo,
+    wrapping_form,
+)
 from pyqorreos.core.address_book import AddressBook
 from pyqorreos.core.folder_utils import find_sent_folder
-from pyqorreos.core.openpgp import OpenPgpSettings, openpgp_available
+from pyqorreos.core.openpgp import (
+    OpenPgpSettings,
+    openpgp_available,
+    parse_recipient_fields,
+)
 from pyqorreos.core.compose_email import EmailAttachment, build_draft_bytes, prepare_outgoing_html
 from pyqorreos.core.compose_utils import (
     body_mentions_attachment,
@@ -102,7 +116,7 @@ class ComposeDialog(QDialog):
         self._cleanup_worker: DeleteMessagesWorker | None = None
         self._sending = False
         self.setWindowTitle(title)
-        self.setMinimumSize(720, 560)
+        self.setMinimumSize(520, 420)
         self.resize(820, 620)
         self._configure_window_flags()
         self._theme = resolve_theme_from_parent(parent)
@@ -126,13 +140,14 @@ class ComposeDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 12)
         layout.setSpacing(10)
+        body = scrolling_body(layout)
 
         header = QWidget()
         mark_object(header, "pyqComposeHeader")
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(12, 10, 12, 10)
         header_layout.setSpacing(7)
-        form = QFormLayout()
+        form = wrapping_form(QFormLayout())
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(7)
@@ -153,57 +168,63 @@ class ComposeDialog(QDialog):
         self.bcc_edit.setAccessibleName("Destinatarios en copia oculta")
         form.addRow("CCO:", self._address_field_row(self.bcc_edit))
 
+        self.recipients_preview = QLabel("")
+        self.recipients_preview.setWordWrap(True)
+        mark_role(self.recipients_preview, "hint")
+        form.addRow("", self.recipients_preview)
+        for editor in (self.to_edit, self.cc_edit, self.bcc_edit):
+            editor.textChanged.connect(self._refresh_recipient_preview)
+
         self.subject_edit = QLineEdit()
         self.subject_edit.setPlaceholderText("Escribe el asunto del correo")
         self.subject_edit.setAccessibleName("Asunto")
         form.addRow("Asunto:", self.subject_edit)
 
         header_layout.addLayout(form)
-        layout.addWidget(header)
+        body.addWidget(header)
         if self._address_book is not None:
             self._setup_address_completers()
 
         options = QWidget()
+        enable_height_for_width(options)
         mark_object(options, "pyqComposeOptions")
-        snippet_row = QHBoxLayout()
+        snippet_row = FlowLayout(options, hspacing=8, vspacing=6)
         snippet_row.setContentsMargins(10, 6, 10, 6)
-        snippet_row.setSpacing(8)
         snippet_row.addWidget(QLabel("Plantilla:"))
-        self.snippet_combo = QComboBox()
+        self.snippet_combo = wrapping_combo(QComboBox(), 16)
         self.snippet_combo.addItem("— Insertar plantilla —", None)
         for snippet in self._snippets:
             self.snippet_combo.addItem(snippet.get("name", "Plantilla"))
         self.snippet_combo.activated.connect(self._insert_snippet)
-        snippet_row.addWidget(self.snippet_combo, 1)
-        options.setLayout(snippet_row)
-        layout.addWidget(options)
+        flow_field(self.snippet_combo, 140)
+        snippet_row.addWidget(self.snippet_combo)
+        body.addWidget(options)
 
         message_label = QLabel("Mensaje")
         mark_role(message_label, "section-title")
-        layout.addWidget(message_label)
+        body.addWidget(message_label)
         self.body_editor = RichComposeEditor(theme=self._theme)
         self.body_editor.setAccessibleName("Editor del mensaje")
-        layout.addWidget(self.body_editor, 1)
+        body.addWidget(self.body_editor, 1)
 
         attachments = QWidget()
         mark_object(attachments, "pyqComposeAttachments")
         attachments_layout = QVBoxLayout(attachments)
         attachments_layout.setContentsMargins(10, 7, 10, 7)
         attachments_layout.setSpacing(6)
-        attach_row = QHBoxLayout()
+        attach_row = FlowLayout(hspacing=8, vspacing=6)
         attach_row.addWidget(QLabel("Adjuntos:"))
-        self.attach_btn = QPushButton("Añadir archivos…")
+        self.attach_btn = flow_button(QPushButton("Añadir archivos…"))
         self.attach_btn.setIcon(action_icon("attachment"))
         mark_role(self.attach_btn, "default")
         self.attach_btn.clicked.connect(self._add_attachments)
-        self.remove_attach_btn = QPushButton("Quitar seleccionado")
+        self.remove_attach_btn = flow_button(QPushButton("Quitar seleccionado"))
         self.remove_attach_btn.setIcon(action_icon("delete"))
         mark_role(self.remove_attach_btn, "default")
         self.remove_attach_btn.clicked.connect(self._remove_attachment)
         self.remove_attach_btn.setEnabled(False)
         attach_row.addWidget(self.attach_btn)
         attach_row.addWidget(self.remove_attach_btn)
-        attach_row.addStretch()
         attachments_layout.addLayout(attach_row)
 
         self.attach_list = QListWidget()
@@ -213,10 +234,11 @@ class ComposeDialog(QDialog):
             lambda: self.remove_attach_btn.setEnabled(self.attach_list.currentRow() >= 0)
         )
         attachments_layout.addWidget(self.attach_list)
-        layout.addWidget(attachments)
+        body.addWidget(attachments)
 
-        security_row = QHBoxLayout()
-        security_row.setSpacing(14)
+        security_host = QWidget()
+        enable_height_for_width(security_host)
+        security_row = FlowLayout(security_host, hspacing=14, vspacing=6)
         self.read_receipt_check = QCheckBox("Solicitar acuse de recibo")
         self.read_receipt_check.setChecked(self._request_read_receipt_default)
         receipt_tip = (
@@ -241,15 +263,14 @@ class ComposeDialog(QDialog):
         else:
             self.openpgp_sign_check = None
             self.openpgp_encrypt_check = None
-        security_row.addStretch()
-        layout.addLayout(security_row)
+        body.addWidget(security_host)
 
         footer = QWidget()
         mark_object(footer, "pyqComposeFooter")
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(8, 8, 8, 0)
         buttons = QDialogButtonBox()
-        self.draft_btn = QPushButton("Guardar borrador")
+        self.draft_btn = flow_button(QPushButton("Guardar borrador"))
         self.draft_btn.setIcon(action_icon("drafts"))
         mark_role(self.draft_btn, "default")
         self.draft_btn.clicked.connect(self._save_draft)
@@ -274,11 +295,12 @@ class ComposeDialog(QDialog):
 
     def _address_field_row(self, edit: QLineEdit) -> QWidget:
         row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(edit, 1)
+        enable_height_for_width(row)
+        layout = FlowLayout(row, hspacing=6, vspacing=4)
+        flow_field(edit, 120)
+        layout.addWidget(edit)
         if self._address_book is not None:
-            btn = QPushButton("Agenda…")
+            btn = flow_button(QPushButton("Agenda…"))
             btn.setIcon(action_icon("users"))
             mark_role(btn, "default")
             btn.setToolTip("Elegir un contacto de la agenda")
@@ -474,14 +496,56 @@ class ComposeDialog(QDialog):
         base = self.windowTitle().split("  •")[0]
         return f"{base}  • borrador guardado"
 
+    def _refresh_recipient_preview(self) -> None:
+        fields = (
+            self.to_edit.text(),
+            self.cc_edit.text(),
+            self.bcc_edit.text(),
+        )
+        if not any(field.strip() for field in fields):
+            self.recipients_preview.setText("")
+            return
+        valid, invalid = parse_recipient_fields(*fields)
+        parts: list[str] = []
+        if valid:
+            parts.append("Se enviará a: " + ", ".join(valid))
+        if invalid:
+            parts.append("No válidos: " + ", ".join(invalid))
+        self.recipients_preview.setText(" · ".join(parts))
+
+    def _missing_attachments(self) -> list[str]:
+        missing: list[str] = []
+        for attachment in self._attachments:
+            if not Path(attachment.path).is_file():
+                missing.append(attachment.filename)
+        return missing
+
     def _send(self) -> None:
         to = self.to_edit.text().strip()
+        cc = self.cc_edit.text().strip()
+        bcc = self.bcc_edit.text().strip()
         subject = self.subject_edit.text().strip()
         plain = self.body_editor.plain_text().strip()
         html = prepare_outgoing_html(self.body_editor.html())
 
-        if not to:
+        valid, invalid = parse_recipient_fields(to, cc, bcc)
+        if invalid:
+            QMessageBox.warning(
+                self,
+                "Destinatarios",
+                "Estas direcciones no son un correo:\n" + "\n".join(invalid),
+            )
+            return
+        if not valid:
             QMessageBox.warning(self, "Error", "Indica al menos un destinatario.")
+            return
+        missing = self._missing_attachments()
+        if missing:
+            QMessageBox.warning(
+                self,
+                "Adjunto no encontrado",
+                "No se encuentra en el disco:\n" + "\n".join(missing),
+            )
             return
         if not plain and not self._attachments:
             QMessageBox.warning(self, "Error", "Escribe un mensaje o adjunta un archivo.")
@@ -528,8 +592,8 @@ class ComposeDialog(QDialog):
             to,
             subject,
             plain,
-            self.cc_edit.text().strip(),
-            self.bcc_edit.text().strip(),
+            cc,
+            bcc,
             body_html=html,
             attachments=list(self._attachments),
             request_read_receipt=self.read_receipt_check.isChecked(),

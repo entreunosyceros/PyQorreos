@@ -25,7 +25,9 @@ from PySide6.QtWidgets import (
 from pyqorreos import __version__
 from pyqorreos.ui.theme import about_features_html, mark_role, prevent_context_menu, resolve_theme_from_parent
 
-LOGO_PATH = Path(__file__).resolve().parent.parent / "img" / "logos.png"
+LOGO_PATH = Path(__file__).resolve().parent.parent / "img" / "logo.png"
+# El logo es un cartel horizontal (icono + nombre). Cabe en el ancho del diálogo.
+_LOGO_MAX_WIDTH = 420
 GITHUB_URL = "https://github.com/entreunosyceros/pyqorreos"
 
 DESCRIPTION = (
@@ -42,7 +44,7 @@ class AboutDialog(QDialog):
         super().__init__(parent)
         self._theme = resolve_theme_from_parent(parent)
         self.setWindowTitle("Acerca de PyQorreos")
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(480)
         self.setMinimumHeight(520)
         self.setModal(True)
         self._build_ui()
@@ -64,12 +66,12 @@ class AboutDialog(QDialog):
 
         logo_label = QLabel()
         logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        if LOGO_PATH.exists():
+        if LOGO_PATH.is_file():
             pixmap = QPixmap(str(LOGO_PATH))
             if not pixmap.isNull():
                 scaled = pixmap.scaled(
-                    160,
-                    160,
+                    _LOGO_MAX_WIDTH,
+                    _LOGO_MAX_WIDTH,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )

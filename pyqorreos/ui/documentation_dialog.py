@@ -17,7 +17,6 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QDialog,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -29,6 +28,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from pyqorreos.ui.flow_layout import (
+    FlowLayout,
+    enable_height_for_width,
+    flow_button,
+    flow_field,
+    scrolling_body,
+)
 from pyqorreos.ui.theme import (
     mark_role,
     prevent_context_menu,
@@ -106,7 +112,7 @@ class DocumentationDialog(QDialog):
         super().__init__(parent)
         self._theme = resolve_theme_from_parent(parent)
         self.setWindowTitle("Documentación de PyQorreos")
-        self.setMinimumSize(860, 600)
+        self.setMinimumSize(560, 400)
         self.setModal(False)
         # (título, ruta resuelta) de los documentos disponibles.
         self._docs: list[tuple[str, Path]] = []
@@ -121,33 +127,35 @@ class DocumentationDialog(QDialog):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(8)
+        body = scrolling_body(outer)
 
-        toolbar = QHBoxLayout()
-        self.back_btn = QPushButton("← Atrás")
+        toolbar_host = QWidget()
+        enable_height_for_width(toolbar_host)
+        toolbar = FlowLayout(toolbar_host, hspacing=8, vspacing=6)
+        self.back_btn = flow_button(QPushButton("← Atrás"))
         mark_role(self.back_btn, "default")
         self.back_btn.setEnabled(False)
         self.back_btn.clicked.connect(self._go_back)
         toolbar.addWidget(self.back_btn)
 
-        toolbar.addStretch()
         toolbar.addWidget(QLabel("Buscar:"))
         self.find_edit = QLineEdit()
         self.find_edit.setPlaceholderText("Buscar en la página…")
-        self.find_edit.setMaximumWidth(260)
+        flow_field(self.find_edit, 140)
         self.find_edit.returnPressed.connect(self._find_next)
         self.find_edit.textChanged.connect(self._on_find_text_changed)
         toolbar.addWidget(self.find_edit)
-        self.find_btn = QPushButton("Siguiente")
+        self.find_btn = flow_button(QPushButton("Siguiente"))
         mark_role(self.find_btn, "default")
         self.find_btn.clicked.connect(self._find_next)
         toolbar.addWidget(self.find_btn)
-        outer.addLayout(toolbar)
+        body.addWidget(toolbar_host)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.nav_list = QListWidget()
         self.nav_list.setMaximumWidth(260)
-        self.nav_list.setMinimumWidth(180)
+        self.nav_list.setMinimumWidth(140)
         self.nav_list.currentRowChanged.connect(self._on_nav_changed)
         splitter.addWidget(self.nav_list)
 
@@ -161,19 +169,20 @@ class DocumentationDialog(QDialog):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([220, 640])
-        outer.addWidget(splitter, 1)
+        body.addWidget(splitter, 1)
 
-        bottom = QHBoxLayout()
-        self.github_btn = QPushButton("Ver en GitHub")
+        bottom_host = QWidget()
+        enable_height_for_width(bottom_host)
+        bottom = FlowLayout(bottom_host, hspacing=8, vspacing=6)
+        self.github_btn = flow_button(QPushButton("Ver en GitHub"))
         mark_role(self.github_btn, "secondary")
         self.github_btn.clicked.connect(lambda: webbrowser.open(GITHUB_DOCS_URL))
         bottom.addWidget(self.github_btn)
-        bottom.addStretch()
-        close_btn = QPushButton("Cerrar")
+        close_btn = flow_button(QPushButton("Cerrar"))
         mark_role(close_btn, "default")
         close_btn.clicked.connect(self.accept)
         bottom.addWidget(close_btn)
-        outer.addLayout(bottom)
+        outer.addWidget(bottom_host)
 
     def _apply_browser_theme(self) -> None:
         t = theme_tokens(self._theme)

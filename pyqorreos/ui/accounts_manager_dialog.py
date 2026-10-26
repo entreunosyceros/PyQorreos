@@ -10,19 +10,25 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
-    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from pyqorreos.core.account import MailAccount
 from pyqorreos.core.mail_cache import MailCache
 from pyqorreos.core.settings import Settings
 from pyqorreos.ui.account_dialog import AccountDialog
+from pyqorreos.ui.flow_layout import (
+    FlowLayout,
+    enable_height_for_width,
+    flow_button,
+    scrolling_body,
+)
 from pyqorreos.ui.theme import mark_role, prevent_context_menu
 
 
@@ -47,13 +53,17 @@ class AccountsManagerDialog(QDialog):
         self._cache = MailCache()
 
         self.setWindowTitle("Cuentas de correo")
-        self.setMinimumSize(480, 320)
+        # Ancho para Añadir, Editar, Eliminar y Usar esta cuenta en una fila,
+        # y alto para que esa fila no quede bajo el scroll de la lista.
+        self.setMinimumSize(640, 460)
+        self.resize(760, 540)
         self._build_ui()
         prevent_context_menu(self)
         self._refresh_list()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        body = scrolling_body(layout)
 
         hint = QLabel(
             "Selecciona una cuenta y pulsa «Editar» (o doble clic) para cambiar sus datos. "
@@ -62,31 +72,32 @@ class AccountsManagerDialog(QDialog):
         )
         hint.setWordWrap(True)
         mark_role(hint, "hint")
-        layout.addWidget(hint)
+        body.addWidget(hint)
 
         self.account_list = QListWidget()
         self.account_list.itemDoubleClicked.connect(self._edit_account)
         self.account_list.itemSelectionChanged.connect(self._update_action_states)
-        layout.addWidget(self.account_list)
+        body.addWidget(self.account_list, 1)
 
-        btn_row = QHBoxLayout()
-        self.btn_add = QPushButton("+ Añadir")
+        actions = QWidget()
+        enable_height_for_width(actions)
+        btn_row = FlowLayout(actions, hspacing=8, vspacing=6)
+        self.btn_add = flow_button(QPushButton("+ Añadir"))
         mark_role(self.btn_add, "primary")
         self.btn_add.clicked.connect(self._add_account)
-        self.btn_edit = QPushButton("Editar")
+        self.btn_edit = flow_button(QPushButton("Editar"))
         mark_role(self.btn_edit, "default")
         self.btn_edit.clicked.connect(self._edit_account)
-        self.btn_remove = QPushButton("Eliminar")
+        self.btn_remove = flow_button(QPushButton("Eliminar"))
         mark_role(self.btn_remove, "danger")
         self.btn_remove.clicked.connect(self._remove_account)
-        self.btn_use = QPushButton("Usar esta cuenta")
+        self.btn_use = flow_button(QPushButton("Usar esta cuenta"))
         self.btn_use.clicked.connect(self._use_selected)
         btn_row.addWidget(self.btn_add)
         btn_row.addWidget(self.btn_edit)
         btn_row.addWidget(self.btn_remove)
-        btn_row.addStretch()
         btn_row.addWidget(self.btn_use)
-        layout.addLayout(btn_row)
+        layout.addWidget(actions)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)

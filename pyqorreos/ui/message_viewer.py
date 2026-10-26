@@ -11,7 +11,6 @@ import json
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
-    QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -20,6 +19,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from pyqorreos.ui.flow_layout import FlowBar, flow_button, flow_field
 
 from pyqorreos.core.link_safety import is_suspicious_link, url_from_loose_text
 from pyqorreos.ui.action_icons import action_icon
@@ -70,14 +71,9 @@ class MessageViewer(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        self._toolbar = QWidget()
-        self._toolbar.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        toolbar = QHBoxLayout(self._toolbar)
-        toolbar.setContentsMargins(0, 0, 0, 0)
-        toolbar.setSpacing(6)
-        self._btn_load_images = QPushButton("Mostrar imágenes remotas")
+        self._toolbar = FlowBar(hspacing=6, vspacing=4)
+        toolbar = self._toolbar.flow
+        self._btn_load_images = flow_button(QPushButton("Mostrar imágenes remotas"))
         self._btn_load_images.setIcon(action_icon("image"))
         self._btn_load_images.setAccessibleName("Mostrar imágenes remotas")
         self._btn_load_images.setToolTip("Mostrar imágenes remotas del mensaje")
@@ -85,7 +81,7 @@ class MessageViewer(QWidget):
         self._btn_load_images.clicked.connect(self.load_remote_images_requested.emit)
         toolbar.addWidget(self._btn_load_images)
 
-        self._btn_view_mode = QPushButton("Modo lectura")
+        self._btn_view_mode = flow_button(QPushButton("Modo lectura"))
         self._btn_view_mode.setIcon(action_icon("reading-mode"))
         self._btn_view_mode.setAccessibleName("Cambiar modo de lectura")
         self._btn_view_mode.setToolTip("Alternar entre HTML, modo lectura y texto plano")
@@ -93,7 +89,7 @@ class MessageViewer(QWidget):
         self._btn_view_mode.clicked.connect(self._toggle_view_mode)
         toolbar.addWidget(self._btn_view_mode)
 
-        self._btn_translate = QPushButton("Traducir")
+        self._btn_translate = flow_button(QPushButton("Traducir"))
         self._btn_translate.setIcon(action_icon("translate"))
         self._btn_translate.setAccessibleName("Traducir mensaje")
         self._btn_translate.setVisible(False)
@@ -102,13 +98,13 @@ class MessageViewer(QWidget):
         )
         self._btn_translate.clicked.connect(self._on_translate_button_clicked)
         toolbar.addWidget(self._btn_translate)
-        toolbar.addStretch(1)
         for btn in (
             self._btn_load_images,
             self._btn_view_mode,
             self._btn_translate,
         ):
             mark_role(btn, "secondary")
+        self._toolbar.refresh()
 
         layout.addWidget(self._toolbar)
 
@@ -118,22 +114,21 @@ class MessageViewer(QWidget):
         mark_role(self._link_warning, "link-warning")
         layout.addWidget(self._link_warning)
 
-        self._read_receipt_bar = QWidget()
-        receipt_layout = QHBoxLayout(self._read_receipt_bar)
-        receipt_layout.setContentsMargins(0, 0, 0, 0)
-        receipt_layout.setSpacing(8)
+        self._read_receipt_bar = FlowBar(hspacing=8, vspacing=4)
+        receipt_layout = self._read_receipt_bar.flow
         self._read_receipt_label = QLabel()
         self._read_receipt_label.setWordWrap(True)
         mark_role(self._read_receipt_label, "hint")
-        receipt_layout.addWidget(self._read_receipt_label, 1)
-        self._btn_send_receipt = QPushButton("Enviar acuse")
+        flow_field(self._read_receipt_label, 120)
+        receipt_layout.addWidget(self._read_receipt_label)
+        self._btn_send_receipt = flow_button(QPushButton("Enviar acuse"))
         self._btn_send_receipt.setToolTip(
             "Confirma al remitente que has leído este mensaje"
         )
         self._btn_send_receipt.clicked.connect(self.send_read_receipt_requested.emit)
         mark_role(self._btn_send_receipt, "secondary")
         receipt_layout.addWidget(self._btn_send_receipt)
-        self._btn_dismiss_receipt = QPushButton("Descartar")
+        self._btn_dismiss_receipt = flow_button(QPushButton("Descartar"))
         self._btn_dismiss_receipt.setToolTip("Ocultar este aviso sin enviar acuse")
         self._btn_dismiss_receipt.clicked.connect(self._dismiss_read_receipt)
         mark_role(self._btn_dismiss_receipt, "default")
@@ -201,13 +196,10 @@ class MessageViewer(QWidget):
             self._render_current()
 
     def set_compact_toolbar(self, compact: bool) -> None:
-        if compact == self._compact_toolbar:
-            return
+        """El salto de línea sustituye al recorte de etiquetas."""
         self._compact_toolbar = compact
-        self._btn_load_images.setText(
-            "Imágenes" if compact else "Mostrar imágenes remotas"
-        )
-        self._btn_view_mode.setText("Lectura" if compact else "Modo lectura")
+        self._btn_load_images.setText("Mostrar imágenes remotas")
+        self._btn_view_mode.setText("Modo lectura")
 
     def sync_toolbar_strip(self) -> None:
         pass

@@ -8,13 +8,13 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from pyqorreos.core.openpgp import (
@@ -24,6 +24,12 @@ from pyqorreos.core.openpgp import (
     list_secret_keys,
     openpgp_available,
     openpgp_unavailable_reason,
+)
+from pyqorreos.ui.flow_layout import (
+    FlowLayout,
+    enable_height_for_width,
+    flow_button,
+    scrolling_body,
 )
 from pyqorreos.ui.theme import mark_role, prevent_context_menu
 
@@ -35,19 +41,20 @@ class OpenPgpKeysDialog(QDialog):
         super().__init__(parent)
         self._use_system_home = use_system_home
         self.setWindowTitle("Claves OpenPGP")
-        self.setMinimumSize(620, 420)
+        self.setMinimumSize(440, 320)
         prevent_context_menu(self)
         self._build_ui()
         self._reload_keys()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        body = scrolling_body(layout)
 
         if not openpgp_available():
             warn = QLabel(openpgp_unavailable_reason())
             warn.setWordWrap(True)
             mark_role(warn, "hint")
-            layout.addWidget(warn)
+            body.addWidget(warn)
         else:
             home = gnupg_home(self._use_system_home)
             hint = QLabel(
@@ -56,25 +63,26 @@ class OpenPgpKeysDialog(QDialog):
             )
             hint.setWordWrap(True)
             mark_role(hint, "hint")
-            layout.addWidget(hint)
+            body.addWidget(hint)
 
-        layout.addWidget(QLabel("Claves públicas"))
+        body.addWidget(QLabel("Claves públicas"))
         self.pub_table = self._make_table()
-        layout.addWidget(self.pub_table, 1)
+        body.addWidget(self.pub_table, 1)
 
-        layout.addWidget(QLabel("Claves privadas (para firmar y descifrar)"))
+        body.addWidget(QLabel("Claves privadas (para firmar y descifrar)"))
         self.sec_table = self._make_table()
-        layout.addWidget(self.sec_table, 1)
+        body.addWidget(self.sec_table, 1)
 
-        btn_row = QHBoxLayout()
-        import_btn = QPushButton("Importar clave…")
+        actions = QWidget()
+        enable_height_for_width(actions)
+        btn_row = FlowLayout(actions, hspacing=8, vspacing=6)
+        import_btn = flow_button(QPushButton("Importar clave…"))
         import_btn.clicked.connect(self._import_key)
-        refresh_btn = QPushButton("Actualizar")
+        refresh_btn = flow_button(QPushButton("Actualizar"))
         refresh_btn.clicked.connect(self._reload_keys)
         btn_row.addWidget(import_btn)
         btn_row.addWidget(refresh_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
+        body.addWidget(actions)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)

@@ -751,19 +751,23 @@ def about_features_html(theme: str | None = None) -> str:
     t = theme_tokens(theme)
     return f"""
 <ul style="margin: 0; padding-left: 1.2em; line-height: 1.45; color: {t.text};">
-<li><b>Varias cuentas</b> — selector y gestor (añadir, editar, eliminar)</li>
-<li><b>OAuth2</b> — Gmail, Outlook, Hotmail, MSN; hosting / cPanel con SSL y STARTTLS</li>
-<li><b>Presets</b> — AOL, Yahoo, Hotmail, MSN y detección automática por dominio</li>
+<li><b>Varias cuentas</b> — árbol por cuenta, gestor (añadir, editar, eliminar) y presets (Gmail, Microsoft, Yahoo, AOL, GMX, cPanel)</li>
+<li><b>OAuth2</b> — identificarse con Google o Microsoft en el navegador, o contraseña de aplicación</li>
 <li><b>Bandeja del sistema</b> — minimizar sin cerrar; Salir cierra por completo</li>
-<li><b>Sincronización incremental</b> y caché SQLite (apertura rápida)</li>
-<li><b>Clasificación</b> — normal, importante, spam (filtro y colores)</li>
+<li><b>Sincronización incremental</b>, caché SQLite y lectura sin conexión de lo ya descargado</li>
+<li><b>Carpetas</b> — crear, renombrar y anidar según el separador del servidor</li>
+<li><b>Clasificación, destacados y archivo</b> — importante, spam, estrella y archivar</li>
+<li><b>Búsqueda</b> — asunto, remitente y cuerpo de los mensajes ya abiertos</li>
 <li><b>Visor HTML</b> — WebEngine, imágenes cid y remotas bajo demanda</li>
-<li><b>Traducción</b> — bajo demanda al idioma de Preferencias</li>
-<li><b>Responder / reenviar / eliminar</b> — barra de herramientas y menú contextual</li>
-<li><b>Acuse de recibo</b> — solicitar al enviar o responder cuando te lo pidan</li>
-<li><b>Editor enriquecido</b> — negrita, cursiva, listas, enlaces, imágenes</li>
+<li><b>Traducción</b> — asunto y cuerpo al idioma de Preferencias, con reintento si el servicio limita</li>
+<li><b>Responder, reenviar y eliminar</b> — barra, menú y selección múltiple</li>
+<li><b>Acuse de recibo</b> — solicitarlo al enviar o responder cuando te lo pidan</li>
+<li><b>Editor enriquecido</b> — formato, corrector, plantillas, agenda y borradores que se guardan solos</li>
+<li><b>OpenPGP opcional</b> — cifrar, firmar, descifrar y comprobar la firma con GnuPG</li>
+<li><b>Documentación integrada</b> — Ayuda → Documentación (F1)</li>
+<li><b>Ventanas adaptables</b> — botones y formularios se reorganizan al estrechar la ventana</li>
 <li><b>Tema claro y oscuro</b> — Preferencias → Apariencia</li>
-<li><b>Contraseñas seguras</b> con keyring del sistema</li>
+<li><b>Contraseñas</b> en el llavero del sistema</li>
 </ul>
 """
 

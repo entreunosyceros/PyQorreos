@@ -28,6 +28,8 @@ accounts.json
 classification.json
 preferences.json
 oauth_clients.json
+oauth_clients.builtin.local.json
+pyqorreos/resources/oauth_clients.builtin.local.json
 mail_cache.db
 *.db
 *.db-journal
@@ -41,7 +43,6 @@ mail_cache.db
 *.mbox
 
 # --- Herramientas de test y cobertura ---
-tests/
 .pytest_cache/
 .coverage
 .coverage.*

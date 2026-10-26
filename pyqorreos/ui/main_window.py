@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QLayout,
     QLineEdit,
     QMainWindow,
     QMenu,
@@ -71,7 +72,7 @@ from pyqorreos.core.reply_utils import (
 from pyqorreos.core.settings import Settings
 from pyqorreos.core.translate import language_label
 from pyqorreos.core.user_preferences import UserPreferences, load_preferences, save_preferences
-from pyqorreos.ui.about_dialog import AboutDialog, LOGO_PATH
+from pyqorreos.ui.about_dialog import AboutDialog
 from pyqorreos.ui.documentation_dialog import DocumentationDialog
 from pyqorreos.ui.account_dialog import AccountDialog
 from pyqorreos.ui.accounts_manager_dialog import AccountsManagerDialog
@@ -94,6 +95,15 @@ from pyqorreos.ui.openpgp_keys_dialog import OpenPgpKeysDialog
 from pyqorreos.ui.preferences_dialog import PreferencesDialog
 from pyqorreos.ui.remote_image_loader import RemoteImageLoader
 from pyqorreos.ui.system_tray import SystemTray
+from pyqorreos.ui.flow_layout import (
+    AdaptivePane,
+    FlowBar,
+    FlowLayout,
+    enable_height_for_width,
+    flow_button,
+    flow_field,
+    wrapping_combo,
+)
 from pyqorreos.ui.theme import (
     apply_app_theme,
     apply_message_viewer_theme,
@@ -236,7 +246,6 @@ class MainWindow(QMainWindow):
         self._manual_refresh_active = False
         self._pending_manual_refresh = False
         self._last_filtered_total = 0
-        self._reader_label_mode = ""
         self._connection_status = "offline"
         self._thread_counts: dict[str, int] = {}
         self._tray_notification: dict[str, str] | None = None
@@ -248,7 +257,7 @@ class MainWindow(QMainWindow):
         self._pending_folder_rename: tuple[str, str] | None = None
 
         self.setWindowTitle("PyQorreos")
-        self.setMinimumSize(720, 580)
+        self.setMinimumSize(700, 460)
         self._build_actions()
         self._build_ui()
         self._build_menu()
@@ -261,7 +270,6 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.aboutToQuit.connect(self._finalize_process_exit)
         self._update_compact_ui(self.width())
-        QTimer.singleShot(0, self._update_reader_action_labels)
 
         if self.accounts:
             last_id = self.settings.get_last_account_id()
@@ -328,22 +336,21 @@ class MainWindow(QMainWindow):
         mark_role(folder_label, "section-title")
         folder_layout.addWidget(folder_label)
 
-        self.btn_new_folder = QPushButton("Carpeta")
+        self.btn_new_folder = flow_button(QPushButton("Carpeta"))
         self.btn_new_folder.setIcon(action_icon("folder-add"))
         self.btn_new_folder.setAccessibleName("Crear carpeta")
         self.btn_new_folder.setToolTip("Crear una carpeta nueva en el servidor")
         self.btn_new_folder.clicked.connect(lambda: self._create_folder())
-        self.btn_new_subfolder = QPushButton("Subcarpeta")
+        self.btn_new_subfolder = flow_button(QPushButton("Subcarpeta"))
         self.btn_new_subfolder.setIcon(action_icon("folder-add"))
         self.btn_new_subfolder.setAccessibleName("Crear subcarpeta")
         self.btn_new_subfolder.setToolTip(
             "Crear una subcarpeta dentro de la carpeta seleccionada"
         )
         self.btn_new_subfolder.clicked.connect(self._create_subfolder)
-        folder_btn_row = QHBoxLayout()
+        folder_btn_row = FlowLayout(hspacing=8, vspacing=6)
         folder_btn_row.addWidget(self.btn_new_folder)
         folder_btn_row.addWidget(self.btn_new_subfolder)
-        folder_btn_row.addStretch()
         folder_layout.addLayout(folder_btn_row)
 
         self.folder_tree = QTreeWidget()
@@ -372,7 +379,7 @@ class MainWindow(QMainWindow):
         self.quota_label.setVisible(False)
         folder_layout.addWidget(self.quota_label)
 
-        folder_panel.setMinimumWidth(120)
+        folder_panel.setMinimumWidth(160)
         splitter.addWidget(folder_panel)
 
         # Panel central: lista de mensajes
@@ -383,23 +390,20 @@ class MainWindow(QMainWindow):
         message_layout.setContentsMargins(10, 10, 10, 10)
         message_layout.setSpacing(8)
 
-        account_row = QHBoxLayout()
+        account_row = FlowLayout(hspacing=8, vspacing=6)
         account_caption = QLabel("Cuenta")
         mark_role(account_caption, "meta")
         account_row.addWidget(account_caption)
-        self.account_combo = QComboBox()
-        self.account_combo.setMinimumWidth(100)
-        self.account_combo.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self.account_combo = wrapping_combo(QComboBox(), 16)
+        self.account_combo.setMinimumWidth(120)
         self.account_combo.currentIndexChanged.connect(self._on_account_combo_changed)
         self.account_combo.setAccessibleName("Cuenta activa")
-        account_row.addWidget(self.account_combo, 1)
-        self.btn_manage_accounts = QPushButton("Gestionar…")
+        account_row.addWidget(self.account_combo)
+        self.btn_manage_accounts = flow_button(QPushButton("Gestionar…"))
         self.btn_manage_accounts.setIcon(action_icon("users"))
         self.btn_manage_accounts.clicked.connect(self._manage_accounts)
         account_row.addWidget(self.btn_manage_accounts)
-        self.btn_edit_account = QPushButton("Editar…")
+        self.btn_edit_account = flow_button(QPushButton("Editar…"))
         self.btn_edit_account.setIcon(action_icon("edit"))
         self.btn_edit_account.setToolTip("Editar la cuenta seleccionada")
         self.btn_edit_account.clicked.connect(self._edit_current_account)
@@ -409,7 +413,7 @@ class MainWindow(QMainWindow):
         self.search_edit.setPlaceholderText("Buscar correo por asunto o remitente…")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.setAccessibleName("Buscar correo")
-        self.search_edit.setMinimumWidth(80)
+        flow_field(self.search_edit, 160)
         self.search_edit.textChanged.connect(lambda _text: self._search_timer.start())
         self.search_body_check = QCheckBox("En el cuerpo")
         self.search_body_check.setToolTip(
@@ -421,10 +425,10 @@ class MainWindow(QMainWindow):
         self.flag_filter_check = QCheckBox("Solo destacados")
         self.flag_filter_check.setToolTip("Mostrar solo los mensajes destacados (★)")
         self.flag_filter_check.toggled.connect(self._apply_list_filters)
-        self.category_filter = QComboBox()
+        self.category_filter = wrapping_combo(QComboBox(), 10)
         self.category_filter.addItems(["Todos", "Normal", "Importante", "Spam"])
         self.category_filter.currentTextChanged.connect(self._apply_category_filter)
-        self.sort_combo = QComboBox()
+        self.sort_combo = wrapping_combo(QComboBox(), 10)
         self.sort_combo.addItems(
             ["Fecha ↓", "Fecha ↑", "Remitente", "Asunto"]
         )
@@ -435,39 +439,38 @@ class MainWindow(QMainWindow):
         self.sort_combo.blockSignals(False)
 
         self._message_header = QWidget()
-        self._message_header.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        enable_height_for_width(self._message_header)
         header_layout = QVBoxLayout(self._message_header)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
         header_layout.addLayout(account_row)
 
         self._connection_banner = QWidget()
+        enable_height_for_width(self._connection_banner)
         mark_role(self._connection_banner, "connection-banner")
-        banner_layout = QHBoxLayout(self._connection_banner)
+        banner_layout = FlowLayout(self._connection_banner, hspacing=7, vspacing=6)
         banner_layout.setContentsMargins(9, 7, 7, 7)
-        banner_layout.setSpacing(7)
         self._connection_banner_label = QLabel()
         self._connection_banner_label.setWordWrap(True)
         self._connection_banner_label.setAccessibleName("Aviso de conexión")
-        banner_layout.addWidget(self._connection_banner_label, 1)
-        self._connection_retry_btn = QPushButton("Reintentar")
+        flow_field(self._connection_banner_label, 120)
+        banner_layout.addWidget(self._connection_banner_label)
+        self._connection_retry_btn = flow_button(QPushButton("Reintentar"))
         self._connection_retry_btn.setIcon(action_icon("refresh"))
         self._connection_retry_btn.clicked.connect(self._retry_current_account)
         banner_layout.addWidget(self._connection_retry_btn)
-        self._connection_edit_btn = QPushButton("Editar cuenta")
+        self._connection_edit_btn = flow_button(QPushButton("Editar cuenta"))
         self._connection_edit_btn.setIcon(action_icon("edit"))
         self._connection_edit_btn.clicked.connect(self._edit_current_account)
         banner_layout.addWidget(self._connection_edit_btn)
         self._connection_banner.hide()
         header_layout.addWidget(self._connection_banner)
 
-        filter_row1 = QHBoxLayout()
-        filter_row1.addWidget(self.search_edit, 1)
+        filter_row1 = FlowLayout(hspacing=8, vspacing=6)
+        filter_row1.addWidget(self.search_edit)
         filter_row1.addWidget(self.search_body_check)
         filter_row1.addWidget(self.unread_only_check)
-        filter_row2 = QHBoxLayout()
+        filter_row2 = FlowLayout(hspacing=8, vspacing=6)
         filter_caption = QLabel("Filtros")
         mark_role(filter_caption, "meta")
         filter_row2.addWidget(filter_caption)
@@ -476,18 +479,18 @@ class MainWindow(QMainWindow):
         order_caption = QLabel("Orden")
         mark_role(order_caption, "meta")
         filter_row2.addWidget(order_caption)
-        filter_row2.addWidget(self.sort_combo, 1)
+        filter_row2.addWidget(self.sort_combo)
         header_layout.addLayout(filter_row1)
         header_layout.addLayout(filter_row2)
-        message_layout.addWidget(self._message_header)
+        message_layout.addWidget(AdaptivePane(self._message_header))
 
         self.message_table = QTableWidget(0, 4)
         self.message_table.setHorizontalHeaderLabels(["Tipo", "De", "Asunto", "Fecha"])
         table_header = self.message_table.horizontalHeader()
+        table_header.setMinimumSectionSize(64)
         table_header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         table_header.resizeSection(0, 96)
-        table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        table_header.resizeSection(1, 160)
+        table_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         table_header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         table_header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         table_header.resizeSection(3, 118)
@@ -538,7 +541,7 @@ class MainWindow(QMainWindow):
         message_layout.addWidget(self.message_table, 1)
 
         # Paginación (50 correos por página)
-        self.btn_delete_selected = QPushButton("Eliminar")
+        self.btn_delete_selected = flow_button(QPushButton("Eliminar"))
         self.btn_delete_selected.setIcon(action_icon("delete"))
         self.btn_delete_selected.setAccessibleName("Eliminar mensajes seleccionados")
         self.btn_delete_selected.setToolTip(
@@ -546,7 +549,7 @@ class MainWindow(QMainWindow):
         )
         self.btn_delete_selected.clicked.connect(self._act_delete.trigger)
         self.btn_delete_selected.setEnabled(False)
-        self.btn_move_selected = QPushButton("Mover a…")
+        self.btn_move_selected = flow_button(QPushButton("Mover a…"))
         self.btn_move_selected.setIcon(action_icon("move"))
         self.btn_move_selected.setAccessibleName("Mover mensajes seleccionados")
         self.btn_move_selected.setToolTip("Mover los mensajes seleccionados a otra carpeta")
@@ -555,30 +558,26 @@ class MainWindow(QMainWindow):
         self._list_action_buttons = [self.btn_delete_selected, self.btn_move_selected]
 
         self._message_footer = QWidget()
-        self._message_footer.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        enable_height_for_width(self._message_footer)
         footer_layout = QVBoxLayout(self._message_footer)
         footer_layout.setContentsMargins(0, 0, 0, 0)
         footer_layout.setSpacing(4)
-        pagination_row = QHBoxLayout()
+        pagination_row = FlowLayout(hspacing=8, vspacing=6)
         pagination_row.addWidget(self.btn_delete_selected)
         pagination_row.addWidget(self.btn_move_selected)
-        pagination_row.addSpacing(12)
-        self.btn_prev_page = QPushButton("Anterior")
+        self.btn_prev_page = flow_button(QPushButton("Anterior"))
         self.btn_prev_page.setIcon(action_icon("chevron-left"))
         self.btn_prev_page.clicked.connect(self._prev_page)
         self.page_label = QLabel("Página 1 de 1")
-        self.btn_next_page = QPushButton("Siguiente")
+        self.btn_next_page = flow_button(QPushButton("Siguiente"))
         self.btn_next_page.setIcon(action_icon("chevron-right"))
         self.btn_next_page.clicked.connect(self._next_page)
-        self.btn_cancel_sync = QPushButton("Cancelar sincronización")
+        self.btn_cancel_sync = flow_button(QPushButton("Cancelar sincronización"))
         self.btn_cancel_sync.clicked.connect(self._cancel_sync)
         self.btn_cancel_sync.setVisible(False)
         pagination_row.addWidget(self.btn_prev_page)
         pagination_row.addWidget(self.page_label)
         pagination_row.addWidget(self.btn_next_page)
-        pagination_row.addStretch()
         pagination_row.addWidget(self.btn_cancel_sync)
         footer_layout.addLayout(pagination_row)
 
@@ -587,11 +586,11 @@ class MainWindow(QMainWindow):
         self.sync_progress.setVisible(False)
         self.sync_progress.setTextVisible(True)
         footer_layout.addWidget(self.sync_progress)
-        message_layout.addWidget(self._message_footer)
+        message_layout.addWidget(AdaptivePane(self._message_footer))
 
         self._refresh_account_combo()
 
-        message_panel.setMinimumWidth(240)
+        message_panel.setMinimumWidth(280)
         message_panel.setAutoFillBackground(True)
         splitter.addWidget(message_panel)
 
@@ -614,11 +613,8 @@ class MainWindow(QMainWindow):
         self.meta_label.setWordWrap(True)
         reader_layout.addWidget(self.meta_label)
 
-        # Botones de acción del mensaje abierto (dos filas con scroll horizontal si hace falta)
-        self.reader_actions = QWidget()
-        self.reader_actions.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        # Botones del mensaje abierto: saltan de línea si el panel se estrecha.
+        self.reader_actions = FlowBar(hspacing=8, vspacing=6, margins=(0, 4, 0, 6))
         reader_layout.addWidget(self.reader_actions)
 
         self.attachment_panel = AttachmentPanel()
@@ -644,7 +640,7 @@ class MainWindow(QMainWindow):
         self.message_viewer.link_hover_changed.connect(self._on_viewer_link_hover)
         reader_layout.addWidget(self.message_viewer, 1)
 
-        reader_panel.setMinimumWidth(200)
+        reader_panel.setMinimumWidth(220)
         reader_panel.setAutoFillBackground(True)
         splitter.addWidget(reader_panel)
 
@@ -704,8 +700,9 @@ class MainWindow(QMainWindow):
                     ["Tipo", "De", "Asunto", "Carpeta", "Fecha"]
                 )
                 header = self.message_table.horizontalHeader()
-                header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-                header.resizeSection(3, 100)
+                header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+                header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+                header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
                 header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
                 header.resizeSection(4, 118)
             else:
@@ -713,6 +710,8 @@ class MainWindow(QMainWindow):
                     ["Tipo", "De", "Asunto", "Fecha"]
                 )
                 header = self.message_table.horizontalHeader()
+                header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+                header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
                 header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
                 header.resizeSection(3, 118)
 
@@ -812,17 +811,13 @@ class MainWindow(QMainWindow):
                 panel.repaint()
             self.main_splitter.repaint()
             self._splitter_drag_active = False
-        # Al estrechar el panel de lectura (sin maximizar/desmaximizar) hay que
-        # acortar las etiquetas para que los botones no se solapen.
-        self._update_reader_action_labels()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._update_compact_ui(event.size().width())
-        self._update_reader_action_labels()
 
     def _update_compact_ui(self, width: int | None = None) -> None:
-        """Acorta etiquetas y recalcula franjas de botones según el ancho de ventana."""
+        """La barra principal pasa a solo iconos cuando la ventana es estrecha."""
         width = width if width is not None else self.width()
         compact = width < 1120
         narrow = width < 920
@@ -830,93 +825,7 @@ class MainWindow(QMainWindow):
             return
         self._ui_compact = compact
         self._ui_narrow = narrow
-
-        self.btn_new_folder.setText("" if narrow else "Carpeta")
-        self.btn_new_subfolder.setText("Sub" if narrow else "Subcarpeta")
-        self.btn_manage_accounts.setText("…" if narrow else "Gestionar…")
-        self.btn_edit_account.setText("" if narrow else "Editar…")
-        self.btn_delete_selected.setText("" if narrow else "Eliminar")
-        self.btn_move_selected.setText("" if narrow else "Mover a…")
-        self.btn_prev_page.setText("" if narrow else "Anterior")
-        self.btn_next_page.setText("" if narrow else "Siguiente")
-        self.btn_cancel_sync.setText("Cancelar" if compact else "Cancelar sincronización")
         self._apply_toolbar_labels(narrow)
-        self.message_viewer.set_compact_toolbar(compact)
-        self.message_viewer.sync_toolbar_strip()
-
-    def _reader_panel_width(self) -> int:
-        if hasattr(self, "reader_actions") and self.reader_actions.width() > 0:
-            return self.reader_actions.width()
-        if hasattr(self, "_reader_panel") and self._reader_panel.width() > 0:
-            return self._reader_panel.width()
-        return max(self.width() // 3, 280)
-
-    def _reader_button_label_mode(self) -> str:
-        # Umbrales altos: con textos largos («Responder a todos») cuatro botones
-        # Expanding se solapan mucho antes de los 560 px del panel.
-        width = self._reader_panel_width()
-        if width >= 680:
-            return "full"
-        if width >= 460:
-            return "compact"
-        return "minimal"
-
-    def _reader_action_specs(self) -> tuple[tuple, tuple]:
-        mode = self._reader_button_label_mode()
-        labels = {
-            "full": {
-                "row1": (
-                    (self._act_reply, "Responder", "primary"),
-                    (self._act_reply_all, "Responder a todos", "primary"),
-                    (self._act_forward, "Reenviar", "secondary"),
-                    (self._act_delete, "Eliminar", "danger"),
-                ),
-                "row2": (
-                    (self._act_mark_important, "Importante", "category"),
-                    (self._act_mark_spam, "Spam", "category"),
-                    (self._act_mark_normal, "Normal", "category"),
-                    (self._act_unsubscribe, "Dar de baja", "secondary"),
-                ),
-            },
-            "compact": {
-                "row1": (
-                    (self._act_reply, "Resp.", "primary"),
-                    (self._act_reply_all, "Todos", "primary"),
-                    (self._act_forward, "Reenv.", "secondary"),
-                    (self._act_delete, "", "danger"),
-                ),
-                "row2": (
-                    (self._act_mark_important, "Imp.", "category"),
-                    (self._act_mark_spam, "Spam", "category"),
-                    (self._act_mark_normal, "Norm.", "category"),
-                    (self._act_unsubscribe, "Baja", "secondary"),
-                ),
-            },
-            "minimal": {
-                "row1": (
-                    (self._act_reply, "", "primary"),
-                    (self._act_reply_all, "", "primary"),
-                    (self._act_forward, "", "secondary"),
-                    (self._act_delete, "", "danger"),
-                ),
-                "row2": (
-                    (self._act_mark_important, "", "category"),
-                    (self._act_mark_spam, "", "category"),
-                    (self._act_mark_normal, "", "category"),
-                    (self._act_unsubscribe, "", "secondary"),
-                ),
-            },
-        }
-        block = labels[mode]
-        return block["row1"], block["row2"]
-
-    def _update_reader_action_labels(self) -> None:
-        mode = self._reader_button_label_mode()
-        if mode == self._reader_label_mode:
-            return
-        self._reader_label_mode = mode
-        if hasattr(self, "_reader_row1"):
-            self._build_reader_actions()
 
     def _setup_menu_action(
         self,
@@ -1170,83 +1079,56 @@ class MainWindow(QMainWindow):
             if pause_bg_sync:
                 self._background_sync.resume_after_modal()
 
-    def _ensure_reader_actions_layout(self) -> None:
-        """Dos filas de botones que reparten el ancho disponible (sin scroll)."""
-        if hasattr(self, "_reader_row1"):
-            return
-        outer = QVBoxLayout(self.reader_actions)
-        outer.setContentsMargins(0, 4, 0, 6)
-        outer.setSpacing(8)
-        self._reader_row1 = QHBoxLayout()
-        self._reader_row1.setSpacing(10)
-        self._reader_row1.setContentsMargins(0, 0, 0, 0)
-        self._reader_row2 = QHBoxLayout()
-        self._reader_row2.setSpacing(10)
-        self._reader_row2.setContentsMargins(0, 0, 0, 0)
-        outer.addLayout(self._reader_row1)
-        outer.addLayout(self._reader_row2)
+    def _reader_actions_layout(self) -> FlowLayout:
+        return self.reader_actions.flow
 
-    def _clear_layout(self, layout: QHBoxLayout) -> None:
+    def _clear_layout(self, layout: QLayout) -> None:
         while layout.count():
             item = layout.takeAt(0)
+            if item is None:
+                continue
             widget = item.widget()
             if widget:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
 
     def _make_reader_button(
         self, action: QAction, label: str, role: str
     ) -> QPushButton:
-        btn = QPushButton(label)
+        btn = flow_button(QPushButton(label))
         btn.setIcon(action.icon())
         btn.setIconSize(QSize(16, 16))
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         mark_role(btn, role)
-        # Densidad según el ancho del panel: menos padding evita solapes.
-        density = self._reader_label_mode or self._reader_button_label_mode()
-        btn.setProperty("pyqReaderAction", density)
         btn.setEnabled(action.isEnabled())
-        # Expanding reparte el ancho, pero el mínimo debe poder bajar al icono
-        # para que el layout no empuje botones unos encima de otros.
-        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        btn.setMinimumWidth(40 if not label else 56)
         btn.setMinimumHeight(32)
         btn.clicked.connect(action.trigger)
-        btn.setToolTip(action.toolTip() or action.text())
+        btn.setToolTip(action.toolTip() or action.text() or label)
         btn.setAccessibleName(action.text())
         btn.setProperty("pyqUnsubscribe", action is self._act_unsubscribe)
-        # Fuerza a Qt a aplicar el padding según pyqReaderAction.
-        style = btn.style()
-        style.unpolish(btn)
-        style.polish(btn)
         return btn
 
     def _build_reader_actions(self) -> None:
-        """Botones visibles sobre el mensaje abierto (dos filas, texto completo)."""
-        self._ensure_reader_actions_layout()
-        self._clear_layout(self._reader_row1)
-        self._clear_layout(self._reader_row2)
+        """Botones del mensaje abierto, con el texto completo y salto de línea."""
+        layout = self._reader_actions_layout()
+        self._clear_layout(layout)
         self._reader_buttons.clear()
-        self._reader_label_mode = self._reader_button_label_mode()
-        row1_specs, row2_specs = self._reader_action_specs()
-
-        for action, label, role in row1_specs:
+        specs = (
+            (self._act_reply, "Responder", "primary"),
+            (self._act_reply_all, "Responder a todos", "primary"),
+            (self._act_forward, "Reenviar", "secondary"),
+            (self._act_delete, "Eliminar", "danger"),
+            (self._act_mark_important, "Importante", "category"),
+            (self._act_mark_spam, "Spam", "category"),
+            (self._act_mark_normal, "Normal", "category"),
+            (self._act_unsubscribe, "Dar de baja", "secondary"),
+        )
+        for action, label, role in specs:
             btn = self._make_reader_button(action, label, role)
-            self._reader_row1.addWidget(btn, 1)
+            layout.addWidget(btn)
             self._reader_buttons.append(btn)
-
-        for action, label, role in row2_specs:
-            btn = self._make_reader_button(action, label, role)
-            self._reader_row2.addWidget(btn, 1)
-            self._reader_buttons.append(btn)
-        self._sync_reader_actions_height()
-
-    def _sync_reader_actions_height(self) -> None:
-        """Reserva altura suficiente para las dos filas de botones del lector."""
-        if not hasattr(self, "reader_actions"):
-            return
-        self.reader_actions.adjustSize()
-        height = max(self.reader_actions.sizeHint().height(), 92)
-        self.reader_actions.setFixedHeight(height)
+        self.reader_actions.refresh()
 
     @staticmethod
     def _safe_worker_running(worker: QThread | None) -> bool:
@@ -1338,14 +1220,10 @@ class MainWindow(QMainWindow):
         if has_row:
             if len(selected) == 1:
                 tip = "Eliminar el mensaje seleccionado (Supr)"
-                delete_label = "" if self._ui_narrow else "Eliminar"
+                delete_label = "Eliminar"
             else:
                 tip = f"Eliminar {len(selected)} mensajes seleccionados (Supr)"
-                delete_label = (
-                    ""
-                    if self._ui_narrow
-                    else f"Eliminar ({len(selected)})"
-                )
+                delete_label = f"Eliminar ({len(selected)})"
             self._act_delete.setToolTip(tip)
             if hasattr(self, "btn_delete_selected"):
                 self.btn_delete_selected.setText(delete_label)
@@ -1651,12 +1529,13 @@ class MainWindow(QMainWindow):
             self._connect_account(account)
 
     def _build_system_tray(self) -> None:
-        """Inicializa el icono en la bandeja del sistema con logos.png."""
+        """Inicializa el icono en la bandeja del sistema."""
         if not SystemTray.is_available():
             self.status_bar.showMessage("Bandeja del sistema no disponible en este entorno")
             return
 
-        self._tray = SystemTray(self, LOGO_PATH)
+        tray_icon = Path(__file__).resolve().parent.parent / "img" / "ui" / "mail.svg"
+        self._tray = SystemTray(self, tray_icon)
         self._tray.set_menu(self._build_tray_menu())
         self._tray.signals.message_clicked.connect(self._on_tray_message_clicked)
         self._tray.show()
@@ -3241,13 +3120,22 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("Buscando correo nuevo en el servidor…")
             return
         self._show_sync_progress(done, total)
-        self.status_bar.showMessage(f"Descargando mensajes nuevos… {done} / {total}")
+        notice = ""
+        if self._sync_worker is not None:
+            notice = self._sync_worker.sync_limit_message
+        prefix = f"{notice}. " if notice else ""
+        self.status_bar.showMessage(
+            f"{prefix}Descargando mensajes nuevos… {done} / {total}"
+        )
 
     def _on_sync_finished(
         self, result: tuple[list[MailSummary], list[MailSummary]], generation: int, folder: str
     ) -> None:
         if generation != self._sync_generation:
             return
+        limit_message = ""
+        if self._sync_worker is not None:
+            limit_message = self._sync_worker.sync_limit_message
         self._sync_worker = None
         self._hide_sync_progress()
         if folder != self._current_folder:
@@ -3285,9 +3173,14 @@ class MainWindow(QMainWindow):
         else:
             detail = " — sin mensajes nuevos"
         self._update_connection_status("online")
-        self.status_bar.showMessage(
-            f"Sincronización completa — {len(messages)} mensajes en {self._current_folder}{detail}"
-        )
+        if limit_message:
+            self.status_bar.showMessage(
+                f"{limit_message} — {len(messages)} mensajes en {self._current_folder}{detail}"
+            )
+        else:
+            self.status_bar.showMessage(
+                f"Sincronización completa — {len(messages)} mensajes en {self._current_folder}{detail}"
+            )
         self._sync_new_total = 0
         self._apply_pending_nav()
 

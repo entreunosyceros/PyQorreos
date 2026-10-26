@@ -1,6 +1,6 @@
 <img width="1408" height="768" alt="PyQorreos" src="https://github.com/user-attachments/assets/19640ae3-ae11-419d-b033-9e1ee7fbcfc2" />
 
-# PyQorreos V.0.1.0
+# PyQorreos V.0.1.1
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python&logoColor=white)
 ![PySide6](https://img.shields.io/badge/UI-PySide6-green?style=flat-square&logo=qt&logoColor=white)
@@ -38,6 +38,7 @@ Gestor de correo electrónico con interfaz gráfica en **Python** y **PySide6**.
 - **Agenda de contactos** local (direcciones habituales; sin impacto en sync)
 - **Corrector ortográfico** al redactar (español / inglés)
 - **OAuth2** (Gmail / Microsoft), presets por proveedor y tema claro/oscuro
+- **Ventanas adaptables** al estrecharlas; **Ayuda → Acerca de…** muestra el logo y las funciones
 - **Instalador `.deb`** para Debian/Ubuntu — ver [Instalación](docs/installation.md#paquete-debian-deb)
 - **Tests** unitarios en `tests/` (`pytest`)
 
@@ -55,7 +56,7 @@ python run_app.py
 **En Debian/Ubuntu** (paquete `.deb` desde [Releases](https://github.com/entreunosyceros/PyQorreos/releases)):
 
 ```bash
-sudo apt install ./pyqorreos_0.1.0-3_all.deb
+sudo apt install ./pyqorreos_0.1.1-4_all.deb
 pyqorreos
 ```
 

@@ -1,0 +1,10 @@
+{
+  "gmail": {
+    "client_id": "",
+    "client_secret": ""
+  },
+  "outlook": {
+    "client_id": "",
+    "client_secret": ""
+  }
+}

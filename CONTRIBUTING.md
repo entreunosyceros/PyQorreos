@@ -39,7 +39,7 @@ python run_app.py
 
 ### OAuth (Gmail / Outlook)
 
-Si pruebas autenticación OAuth, configura las credenciales en **Archivo → Preferencias → OAuth** (o edita `~/.config/pyqorreos/oauth_clients.json`). Consulta [docs/configuration.md](docs/configuration.md).
+Si pruebas autenticación OAuth, lo habitual es usar el **cliente embebido** del paquete. Para override: **Archivo → Preferencias → OAuth** (o `~/.config/pyqorreos/oauth_clients.json`). Quien empaquete la app: `python -m pyqorreos.core.oauth_clients install-builtin`. Consulta [docs/configuration.md](docs/configuration.md).
 
 ## Estructura del código
 

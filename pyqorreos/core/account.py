@@ -13,6 +13,41 @@ import uuid
 
 from email.utils import parseaddr
 
+SECURITY_SSL = "ssl"
+SECURITY_STARTTLS = "starttls"
+SECURITY_PLAIN = "plain"
+_SECURITY_MODES = frozenset({SECURITY_SSL, SECURITY_STARTTLS, SECURITY_PLAIN})
+
+
+def infer_imap_security(port: int, use_ssl: bool, use_starttls: bool) -> str:
+    """Deduce el cifrado IMAP de cuentas guardadas antes de imap_security."""
+    if port == 993:
+        return SECURITY_SSL
+    if port == 143:
+        return SECURITY_STARTTLS if use_starttls else SECURITY_PLAIN
+    if use_ssl and not use_starttls:
+        return SECURITY_SSL
+    if use_starttls:
+        return SECURITY_STARTTLS
+    if use_ssl:
+        return SECURITY_SSL
+    return SECURITY_PLAIN
+
+
+def infer_smtp_security(port: int, use_ssl: bool, use_starttls: bool) -> str:
+    """Deduce el cifrado SMTP. 465 es SSL y 587 es STARTTLS."""
+    if port == 465:
+        return SECURITY_SSL
+    if port == 587:
+        return SECURITY_STARTTLS
+    if use_ssl and not use_starttls:
+        return SECURITY_SSL
+    if use_starttls:
+        return SECURITY_STARTTLS
+    if use_ssl:
+        return SECURITY_SSL
+    return SECURITY_PLAIN
+
 
 @dataclass
 class MailAccount:
@@ -24,31 +59,53 @@ class MailAccount:
     imap_port: int = 993
     smtp_host: str = ""
     smtp_port: int = 587
-    use_ssl: bool = True       # Para IMAP (993) y SMTP Implícito (465)
-    use_starttls: bool = True  # Para SMTP Explícito (587)
+    use_ssl: bool = True       # Reflejo histórico del modo IMAP
+    use_starttls: bool = True  # Reflejo histórico del modo IMAP
     auth_method: str = "password"  # password | oauth2
     signature: str = ""
+    imap_security: str = ""  # ssl | starttls | plain
+    smtp_security: str = ""  # ssl | starttls | plain
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
+    def __post_init__(self) -> None:
+        if self.imap_security not in _SECURITY_MODES:
+            self.imap_security = infer_imap_security(
+                self.imap_port, self.use_ssl, self.use_starttls
+            )
+        if self.smtp_security not in _SECURITY_MODES:
+            self.smtp_security = infer_smtp_security(
+                self.smtp_port, self.use_ssl, self.use_starttls
+            )
+        self.use_ssl = self.imap_security == SECURITY_SSL
+        self.use_starttls = self.imap_security == SECURITY_STARTTLS
+
     def to_dict(self) -> dict[str, Any]:
-        """Serializa la cuenta para guardarla en JSON."""
-        return asdict(self)
+        """Serializa la cuenta. Los booleanos antiguos reflejan solo IMAP."""
+        data = asdict(self)
+        data["use_ssl"] = self.imap_security == SECURITY_SSL
+        data["use_starttls"] = self.imap_security == SECURITY_STARTTLS
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MailAccount:
         """Reconstruye una cuenta desde un diccionario guardado en disco."""
+        use_ssl = bool(data.get("use_ssl", True) if data.get("use_ssl") is not None else True)
+        use_starttls = bool(
+            data.get("use_starttls", True) if data.get("use_starttls") is not None else True
+        )
         return cls(
-            
             email=data.get("email", ""),
             display_name=data.get("display_name", ""),
             imap_host=data.get("imap_host", ""),
             imap_port=int(data.get("imap_port") or 993),
             smtp_host=data.get("smtp_host", ""),
             smtp_port=int(data.get("smtp_port") or 587),
-            use_ssl=bool(data.get("use_ssl", True) if data.get("use_ssl") is not None else True),
-            use_starttls=bool(data.get("use_starttls", True) if data.get("use_starttls") is not None else True),
+            use_ssl=use_ssl,
+            use_starttls=use_starttls,
             auth_method=str(data.get("auth_method", "password") or "password"),
             signature=str(data.get("signature", "") or ""),
+            imap_security=str(data.get("imap_security") or ""),
+            smtp_security=str(data.get("smtp_security") or ""),
             id=data.get("id") or str(uuid.uuid4()),
         )
 
@@ -62,6 +119,8 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "smtp_port": 587,
         "use_ssl": True,
         "use_starttls": True,
+        "imap_security": "ssl",
+        "smtp_security": "starttls",
     },
     "Outlook / Hotmail / MSN": {
         "imap_host": "outlook.office365.com",
@@ -70,6 +129,8 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "smtp_port": 587,
         "use_ssl": True,
         "use_starttls": True,
+        "imap_security": "ssl",
+        "smtp_security": "starttls",
     },
     "Yahoo": {
         "imap_host": "imap.mail.yahoo.com",
@@ -78,6 +139,8 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "smtp_port": 587,
         "use_ssl": True,
         "use_starttls": True,
+        "imap_security": "ssl",
+        "smtp_security": "starttls",
     },
     "AOL": {
         "imap_host": "imap.aol.com",
@@ -86,6 +149,8 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "smtp_port": 587,
         "use_ssl": True,
         "use_starttls": True,
+        "imap_security": "ssl",
+        "smtp_security": "starttls",
     },
     "GMX": {
         "imap_host": "imap.gmx.com",
@@ -94,6 +159,8 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "smtp_port": 587,
         "use_ssl": True,
         "use_starttls": True,
+        "imap_security": "ssl",
+        "smtp_security": "starttls",
     },
     "Hosting / cPanel (Webempresa, etc.)": {
         "imap_host": "mail.tudominio.com",
@@ -101,7 +168,9 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         "smtp_host": "mail.tudominio.com",
         "smtp_port": 465,
         "use_ssl": True,
-        "use_starttls": True,
+        "use_starttls": False,
+        "imap_security": "ssl",
+        "smtp_security": "ssl",
     },
     "Personalizado": {},
 }
@@ -155,6 +224,22 @@ def is_gmx_email(email: str) -> bool:
     """True para dominios de GMX (@gmx.com, @gmx.net, @gmx.de, @gmx.es…)."""
     domain = _email_domain(email)
     return bool(domain) and (domain == "gmx.com" or domain.startswith("gmx."))
+
+
+def simple_browser_login(
+    provider: str,
+    email: str,
+    *,
+    outlook_ready: bool = False,
+) -> bool:
+    """True si el alta puede ser solo correo + inicio de sesión en el navegador."""
+    if provider == "Gmail" or detect_provider_from_email(email) == "Gmail":
+        return True
+    if outlook_ready and (
+        provider == "Outlook / Hotmail / MSN" or is_microsoft_email(email)
+    ):
+        return True
+    return False
 
 
 def detect_provider_from_email(email: str) -> str | None:

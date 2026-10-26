@@ -1,0 +1,10 @@
+{
+  "gmail": {
+    "client_id": "TU_CLIENT_ID.apps.googleusercontent.com",
+    "client_secret": "TU_CLIENT_SECRET"
+  },
+  "outlook": {
+    "client_id": "TU_APPLICATION_ID_DE_AZURE",
+    "client_secret": "TU_CLIENT_SECRET"
+  }
+}

@@ -35,11 +35,11 @@ Instalador para **Debian / Ubuntu** y derivados. El paquete incluye el código d
 
 ### Instalar desde una release de GitHub
 
-1. Descarga `pyqorreos_0.1.0-3_all.deb` desde [Releases](https://github.com/entreunosyceros/PyQorreos/releases).
+1. Descarga `pyqorreos_0.1.1-4_all.deb` desde [Releases](https://github.com/entreunosyceros/PyQorreos/releases).
 2. Instala el paquete:
 
 ```bash
-sudo apt install ./pyqorreos_0.1.0-3_all.deb
+sudo apt install ./pyqorreos_0.1.1-4_all.deb
 ```
 
 También puedes hacer doble clic en el archivo `.deb` desde el gestor de archivos.
@@ -73,7 +73,7 @@ Arquitectura del `.deb`: **all** (código Python). En el primer arranque, `pip` 
 Descarga el `.deb` de la nueva versión e instálalo de nuevo:
 
 ```bash
-sudo apt install ./pyqorreos_0.1.0-3_all.deb
+sudo apt install ./pyqorreos_0.1.1-4_all.deb
 ```
 
 Tu configuración en `~/.config/pyqorreos/` y el venv en `~/.local/share/pyqorreos/.venv` se conservan. Si tras una actualización hay problemas con dependencias Python, borra el venv y deja que se recree al arrancar (ver desinstalación completa).
@@ -107,7 +107,7 @@ sudo apt install debhelper devscripts python3
 ./scripts/build-deb.sh
 ```
 
-El script deja el archivo en `../pyqorreos_0.1.0-3_all.deb` (ruta relativa a la raíz del repositorio).
+El script deja el archivo en `../pyqorreos_0.1.1-4_all.deb` (ruta relativa a la raíz del repositorio).
 
 ## Ejecutar tests (opcional)
 

@@ -14,11 +14,13 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - **Presets de proveedor** con servidores IMAP/SMTP preconfigurados; al escribir el correo en una cuenta nueva, se **detecta el preset** según el dominio (`@hotmail.*`, `@msn.com`, `@aol.*`, etc.)
 - Selector rápido de cuenta activa y gestor de cuentas (**añadir, editar, eliminar**)
 - Conexión IMAP/SMTP con **SSL/TLS** o **STARTTLS** configurable por cuenta (puertos 993/143, 465/587)
+- **Alta de Gmail**: correo e **Identificarse con Google** (la primera vez pide el Client ID de PyQorreos; Google no acepta el de Thunderbird). En el navegador, Google avisa de que la aplicación no está verificada: es el aviso de que no está certificada; se continúa con **Avanzado** → **Ir a PyQorreos (no seguro)**. Servidores, puertos y contraseña de aplicación quedan en **Configuración avanzada**
 - Preset **Hosting / cPanel (Webempresa, etc.)** para correo en dominio propio (`mail.tudominio.com`)
 - Contraseñas en el llavero del sistema (`keyring`); opción **mostrar contraseña** al configurar la cuenta
 - Avisos contextuales al configurar **Gmail**, **AOL** y **Microsoft** (contraseña de aplicación u OAuth)
 - Firma de correo configurable por cuenta
-- OAuth2 integrado para **Gmail** y **Microsoft** (Outlook, Hotmail, MSN, Live) — inicio de sesión en navegador + renovación automática de tokens
+- OAuth2 integrado para **Gmail** y **Microsoft** (Outlook, Hotmail, MSN, Live) — inicio de sesión en el navegador **sin registrar una app en Google Cloud/Azure** cuando el paquete incluye el cliente de PyQorreos; renovación automática de tokens
+- Preferencias → OAuth permite **sustituir** el cliente incluido por el tuyo (opcional)
 - Alternativa: contraseña de aplicación según el proveedor
 - Bandeja del sistema: la app sigue activa al cerrar la ventana; **Archivo → Salir** cierra por completo
 
@@ -72,7 +74,8 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 - Modos de vista: HTML original, modo lectura y texto plano
 - Imágenes embebidas (cid); imágenes remotas bloqueables por privacidad
 - Botón **«Mostrar imágenes remotas»** bajo demanda (descarga en segundo plano, incluso si el HTML en caché estaba bloqueado)
-- **Traducción** bajo demanda al idioma configurado en Preferencias (botón «Traducir» / «Ver original»); caché por mensaje; enlaces clicables y menú «Abrir en el navegador»
+- **Traducción** bajo demanda al idioma configurado en Preferencias (botón «Traducir» / «Ver original»); traduce asunto y cuerpo, con caché por mensaje, enlaces clicables y menú «Abrir en el navegador»
+- Si el servicio limita las peticiones, espera y reintenta en lugar de fallar al primer aviso; un correo normal viaja en una sola petición
 - Extracción de texto para traducir desde HTML o texto plano, filtrando ruido típico de newsletters (CSS suelto, viñetas vacías)
 - Decodificación de charsets MIME habituales en hosting (`unknown-8bit`, `x-unknown`, etc.)
 - Advertencia anti-phishing al pasar el ratón sobre enlaces sospechosos; la URL se muestra en la barra de estado
@@ -154,6 +157,8 @@ Resumen detallado de lo que ofrece PyQorreos. Para empezar a usarlo, consulta [U
 
 - **Tema claro u oscuro** (Archivo → Preferencias → Apariencia)
 - Ventana principal maximizada en el **monitor principal** al arrancar
+- **Ventanas que se adaptan al tamaño**: botones y campos pasan a la línea siguiente al estrechar la ventana, y el contenido largo se desplaza en lugar de quedar tapado. El mínimo de la ventana principal es 700×460
+- **Ayuda → Acerca de…** muestra el logo (`pyqorreos/img/logo.png`) y el resumen de funcionalidades
 - Estilos unificados en tablas, botones, menús y diálogos (`pyqorreos/ui/theme.py`)
 
 ## Ayuda y documentación

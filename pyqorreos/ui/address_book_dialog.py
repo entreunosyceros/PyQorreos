@@ -10,7 +10,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from pyqorreos.core.address_book import (
@@ -28,6 +28,14 @@ from pyqorreos.core.address_book import (
     get_address_book,
     is_valid_email,
     normalize_email,
+)
+from pyqorreos.ui.flow_layout import (
+    FlowLayout,
+    enable_height_for_width,
+    flow_button,
+    flow_field,
+    scrolling_body,
+    wrapping_form,
 )
 from pyqorreos.ui.theme import mark_role, prevent_context_menu
 from pyqorreos.ui.workers import LoadContactsWorker
@@ -49,7 +57,7 @@ class AddressBookDialog(QDialog):
         self._selected_email: str | None = None
         self._load_worker: LoadContactsWorker | None = None
         self.setWindowTitle("Elegir contacto" if pick_mode else "Agenda de contactos")
-        self.setMinimumSize(640, 420)
+        self.setMinimumSize(460, 340)
         self.resize(760, 480)
         prevent_context_menu(self)
         self._search_timer = QTimer(self)
@@ -75,6 +83,7 @@ class AddressBookDialog(QDialog):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        body = scrolling_body(layout)
 
         hint = QLabel(
             "Contactos guardados localmente. Solo se cargan al abrir esta ventana "
@@ -82,19 +91,22 @@ class AddressBookDialog(QDialog):
         )
         hint.setWordWrap(True)
         mark_role(hint, "hint")
-        layout.addWidget(hint)
+        body.addWidget(hint)
 
         self._status_label = QLabel("")
         mark_role(self._status_label, "hint")
-        layout.addWidget(self._status_label)
+        body.addWidget(self._status_label)
 
-        search_row = QHBoxLayout()
+        search_host = QWidget()
+        enable_height_for_width(search_host)
+        search_row = FlowLayout(search_host, hspacing=8, vspacing=6)
         search_row.addWidget(QLabel("Buscar:"))
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Nombre o dirección de correo")
         self.search_edit.textChanged.connect(self._schedule_reload)
-        search_row.addWidget(self.search_edit, 1)
-        layout.addLayout(search_row)
+        flow_field(self.search_edit, 140)
+        search_row.addWidget(self.search_edit)
+        body.addWidget(search_host)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["★", "Nombre", "Correo"])
@@ -108,20 +120,21 @@ class AddressBookDialog(QDialog):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.doubleClicked.connect(self._on_row_activated)
-        layout.addWidget(self.table, 1)
+        body.addWidget(self.table, 1)
 
-        btn_row = QHBoxLayout()
-        self.add_btn = QPushButton("Añadir…")
+        actions = QWidget()
+        enable_height_for_width(actions)
+        btn_row = FlowLayout(actions, hspacing=8, vspacing=6)
+        self.add_btn = flow_button(QPushButton("Añadir…"))
         self.add_btn.clicked.connect(self._add_contact)
-        self.edit_btn = QPushButton("Editar…")
+        self.edit_btn = flow_button(QPushButton("Editar…"))
         self.edit_btn.clicked.connect(self._edit_contact)
-        self.remove_btn = QPushButton("Eliminar")
+        self.remove_btn = flow_button(QPushButton("Eliminar"))
         self.remove_btn.clicked.connect(self._remove_contact)
         btn_row.addWidget(self.add_btn)
         btn_row.addWidget(self.edit_btn)
         btn_row.addWidget(self.remove_btn)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
+        body.addWidget(actions)
 
         buttons = QDialogButtonBox()
         if self._pick_mode:
@@ -293,9 +306,10 @@ class _ContactEditorDialog(QDialog):
         super().__init__(parent)
         self._contact = contact
         self.setWindowTitle("Editar contacto" if contact else "Nuevo contacto")
-        self.setMinimumWidth(420)
+        self.setMinimumSize(340, 280)
         layout = QVBoxLayout(self)
-        form = QFormLayout()
+        body = scrolling_body(layout)
+        form = wrapping_form(QFormLayout())
         self.email_edit = QLineEdit(contact.email if contact else "")
         self.email_edit.setPlaceholderText("correo@ejemplo.com")
         self.name_edit = QLineEdit(contact.name if contact else "")
@@ -309,7 +323,7 @@ class _ContactEditorDialog(QDialog):
         form.addRow("Nombre:", self.name_edit)
         form.addRow("Notas:", self.notes_edit)
         form.addRow("", self.important_check)
-        layout.addLayout(form)
+        body.addLayout(form)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )

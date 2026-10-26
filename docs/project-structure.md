@@ -36,9 +36,13 @@ PyQorreos/
     │   ├── folder_utils.py         # Árbol de carpetas y utilidades IMAP
     │   ├── message_attachments.py  # Extracción de adjuntos MIME
     │   ├── oauth.py                # OAuth2 (Gmail / Microsoft: Outlook, Hotmail, MSN)
-    │   └── oauth_clients.py        # Client ID/secret OAuth en disco
+    │   └── oauth_clients.py        # Client ID OAuth: usuario, env o embebido
+    ├── resources/
+    │   ├── oauth_clients.builtin.json
+    │   └── oauth_clients.builtin.example.json
     ├── img/
-    │   ├── logos.png
+    │   ├── logo.png                # Logo de la ventana Acerca de
+    │   ├── ui/                     # Iconos SVG de acciones y de la aplicación
     │   └── folders/                # Iconos SVG de carpetas
     └── ui/
         ├── main_window.py          # Ventana principal
@@ -48,7 +52,10 @@ PyQorreos/
         ├── rich_compose_editor.py  # Barra de formato del editor
         ├── account_dialog.py       # Alta/edición de una cuenta
         ├── accounts_manager_dialog.py
-        ├── about_dialog.py
+        ├── about_dialog.py         # Acerca de (logo y lista de funcionalidades)
+        ├── flow_layout.py          # Barras y formularios que se adaptan al ancho
+        ├── oauth_setup_dialog.py   # Ayuda para configurar el cliente OAuth
+        ├── openpgp_keys_dialog.py  # Importar y listar claves OpenPGP
         ├── documentation_dialog.py # Visor de documentación integrado (Ayuda → Documentación)
         ├── preferences_dialog.py   # Preferencias (general, plantillas, clasificación, OAuth)
         ├── address_book_dialog.py    # Agenda de contactos

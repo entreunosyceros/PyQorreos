@@ -7,8 +7,17 @@ Usa deep-translator (importación diferida) sin API key.
 from __future__ import annotations
 
 import re
+import time
 
 MAX_CHUNK_CHARS = 4500
+# Google corta el endpoint no oficial a 5 peticiones por segundo.
+_MIN_INTERVAL_SEC = 0.25
+_RETRY_WAITS_SEC = (1.0, 2.0, 4.0, 8.0)
+# Marca que el traductor suele conservar, para separar asunto y cuerpo en una sola petición.
+_SUBJECT_MARK = "<<<PYQ>>>"
+_SUBJECT_SPLIT = f"\n\n{_SUBJECT_MARK}\n\n"
+_SUBJECT_MARK_RE = re.compile(r"<<<\s*PYQ\s*>>>", re.IGNORECASE)
+_last_request_at = 0.0
 
 # (código ISO 639-1, etiqueta en español)
 TRANSLATION_LANGUAGES: list[tuple[str, str]] = [
@@ -56,12 +65,51 @@ def _get_translator(target_lang: str):
         ) from exc
     return GoogleTranslator(source="auto", target=target_lang)
 
-# Traduce un trozo de texto.
+def _is_rate_limited(exc: BaseException) -> bool:
+    if type(exc).__name__ == "TooManyRequests":
+        return True
+    return "too many requests" in str(exc).lower()
+
+
+def _wait_for_slot() -> None:
+    """Deja pasar el intervalo mínimo desde la petición anterior."""
+    elapsed = time.monotonic() - _last_request_at
+    if _last_request_at and elapsed < _MIN_INTERVAL_SEC:
+        time.sleep(_MIN_INTERVAL_SEC - elapsed)
+
+
+def _mark_request() -> None:
+    global _last_request_at
+    _last_request_at = time.monotonic()
+
+
+# Traduce un trozo de texto, espaciando las peticiones y reintentando un 429.
 def _translate_chunk(translator, text: str) -> str:
     text = text.strip()
     if not text:
         return ""
-    return translator.translate(text)
+    attempts = len(_RETRY_WAITS_SEC) + 1
+    for attempt in range(attempts):
+        if attempt:
+            time.sleep(_RETRY_WAITS_SEC[attempt - 1])
+        _wait_for_slot()
+        _mark_request()
+        try:
+            translated = translator.translate(text)
+        except Exception as exc:
+            if _is_rate_limited(exc) and attempt < attempts - 1:
+                continue
+            if _is_rate_limited(exc):
+                raise RuntimeError(
+                    "El servicio de traducción ha limitado las peticiones. "
+                    "Espera un momento y vuelve a pulsar «Traducir»."
+                ) from exc
+            raise
+        return (translated or "").strip()
+    raise RuntimeError(
+        "El servicio de traducción ha limitado las peticiones. "
+        "Espera un momento y vuelve a pulsar «Traducir»."
+    )
 
 # Divide el texto en trozos que respetan párrafos y el límite del proveedor.
 def _split_for_translation(text: str) -> list[str]:
@@ -91,19 +139,65 @@ def _split_for_translation(text: str) -> list[str]:
         chunks.append(buffer.strip())
     return chunks or [text]
 
+def _translate_parts(translator, parts: list[str]) -> list[str]:
+    return [_translate_chunk(translator, part) for part in parts if part.strip()]
+
+
+def _split_translated_subject(translated: str) -> tuple[str, str] | None:
+    """Separa asunto y cuerpo si la marca de unión sobrevivió a la traducción."""
+    match = _SUBJECT_MARK_RE.search(translated)
+    if not match:
+        return None
+    subject = translated[: match.start()].strip()
+    body = translated[match.end() :].strip()
+    return body, subject
+
+
 # Traduce texto plano al idioma indicado (código ISO 639-1).
 def translate_text(text: str, target_lang: str) -> str:
     """Traduce texto plano al idioma indicado (código ISO 639-1)."""
-    text = normalize_translation_source(text)
-    if not text:
-        return ""
+    body, _subject = translate_message(text, "", target_lang)
+    return body
+
+
+def translate_message(body: str, subject: str, target_lang: str) -> tuple[str, str]:
+    """Traduce cuerpo y asunto con el menor número de peticiones posible.
+
+    Si ambos caben en un trozo, viajan juntos. Los trozos siguientes esperan
+    para no superar el límite de peticiones por segundo y, si el servicio
+    responde 429, se reintenta con esperas crecientes.
+    """
+    body_text = normalize_translation_source(body)
+    subject_text = normalize_translation_source(subject)
+    if not body_text and not subject_text:
+        return "", ""
     target = normalize_language_code(target_lang)
     translator = _get_translator(target)
-    parts = _split_for_translation(text)
-    if len(parts) == 1:
-        return _translate_chunk(translator, parts[0])
-    translated = [_translate_chunk(translator, part) for part in parts if part.strip()]
-    return normalize_translation_source("\n\n".join(translated))
+    body_parts = _split_for_translation(body_text) if body_text else []
+
+    if (
+        subject_text
+        and len(body_parts) == 1
+        and len(subject_text) + len(_SUBJECT_SPLIT) + len(body_parts[0]) <= MAX_CHUNK_CHARS
+    ):
+        translated = _translate_chunk(
+            translator,
+            subject_text + _SUBJECT_SPLIT + body_parts[0],
+        )
+        split = _split_translated_subject(translated)
+        if split is not None:
+            body_out, subject_out = split
+            return normalize_translation_source(body_out), subject_out
+        return (
+            normalize_translation_source(translated),
+            _translate_chunk(translator, subject_text),
+        )
+
+    translated_body = _translate_parts(translator, body_parts)
+    translated_subject = (
+        _translate_chunk(translator, subject_text) if subject_text else ""
+    )
+    return normalize_translation_source("\n\n".join(translated_body)), translated_subject
 
 _CSS_NOISE_RE = re.compile(
     r"(?i)(font-size|line-height|margin|padding|color\s*:|background|"

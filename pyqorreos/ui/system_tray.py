@@ -1,7 +1,7 @@
 """
 Icono de bandeja del sistema (system tray) de PyQorreos.
 
-Muestra logos.png en la bandeja y un menú contextual alineado con las
+Muestra el icono de la aplicación en la bandeja y un menú contextual alineado con las
 opciones de la ventana principal.
 """
 

@@ -143,6 +143,15 @@ class SyncFolderWorker(QThread):
     def cancel(self) -> None:
         self._cancelled = True
 
+    @property
+    def sync_limit_message(self) -> str:
+        """Aviso cuando la primera descarga se queda con los mensajes más nuevos."""
+        limit = self.service.last_sync_limit
+        if not limit:
+            return ""
+        shown, total = limit
+        return f"Mostrando los {shown} más recientes de {total}"
+
     def run(self) -> None:
         try:
 
@@ -337,13 +346,12 @@ class TranslateMessageWorker(QThread):
 
     def run(self) -> None:
         try:
-            from pyqorreos.core.translate import translate_text
+            from pyqorreos.core.translate import translate_message
 
-            body = translate_text(self.body_text, self.target_lang)
-            subject = (
-                translate_text(self.subject, self.target_lang)
-                if self.subject.strip()
-                else ""
+            body, subject = translate_message(
+                self.body_text,
+                self.subject,
+                self.target_lang,
             )
             self.signals.finished.emit(
                 (self.uid, self.target_lang, body, subject)

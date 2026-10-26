@@ -356,23 +356,43 @@ def ensure_valid_access_token(account: MailAccount) -> str:
     store_oauth_tokens(account.id, refreshed)
     return refreshed.access_token
 
-# Construye una cadena SASL XOAUTH2 (base64) para IMAP/SMTP
+# Cadena SASL XOAUTH2 en claro; las bibliotecas la codifican en Base64.
 def build_xoauth2_string(email: str, access_token: str) -> str:
-    """Cadena SASL XOAUTH2 (base64) para IMAP/SMTP."""
-    auth_str = f"user={email}\x01auth=Bearer {access_token}\x01\x01"
-    return base64.b64encode(auth_str.encode("utf-8")).decode("ascii")
+    """Cadena SASL XOAUTH2 en claro. imaplib y smtplib la codifican en Base64."""
+    return f"user={email}\x01auth=Bearer {access_token}\x01\x01"
+
+
+def oauth_flow_status_message(error: str) -> str:
+    """Etiqueta corta para el diálogo de cuenta según el fallo del flujo."""
+    text = (error or "").strip()
+    lowered = text.lower()
+    if "rechazad" in lowered:
+        return "Autorización rechazada"
+    if "tiempo de espera" in lowered or "tiempo agotado" in lowered:
+        return "Tiempo agotado"
+    if "refresh_token" in lowered:
+        return "El proveedor no devolvió refresh_token"
+    return text.split("\n", 1)[0]
+
+
+def record_oauth_callback(server: _OAuthRedirectServer, path: str) -> None:
+    """Guarda code/error. Un GET sin ambos (favicon) no borra un código ya recibido."""
+    parsed = urllib.parse.urlparse(path)
+    params = urllib.parse.parse_qs(parsed.query)
+    code = params.get("code", [None])[0]
+    error = params.get("error", [None])[0]
+    if not code and not error:
+        return
+    server.auth_code = code
+    server.auth_error = error
+    server.auth_state = params.get("state", [None])[0]
 
 # Manejador de callback OAuth2
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
     server_version = "PyQorreosOAuth/1.0"
 
     def do_GET(self) -> None:
-        # Analiza la URL y obtiene los parámetros
-        parsed = urllib.parse.urlparse(self.path)
-        params = urllib.parse.parse_qs(parsed.query)
-        self.server.auth_code = params.get("code", [None])[0]  # type: ignore[attr-defined]
-        self.server.auth_error = params.get("error", [None])[0]  # type: ignore[attr-defined]
-        self.server.auth_state = params.get("state", [None])[0]  # type: ignore[attr-defined]
+        record_oauth_callback(self.server, self.path)  # type: ignore[arg-type]
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()

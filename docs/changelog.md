@@ -6,6 +6,38 @@ Resumen de las mejoras recientes de PyQorreos (no versionado por release aún).
 
 ---
 
+## Alta de Gmail
+
+- Una cuenta Gmail nueva pide el correo y **Identificarse con Google**. El Client ID pegado una vez queda en el cliente incluido del programa.
+- Documentado el aviso de Google «esta aplicación no está verificada»: significa que PyQorreos no está certificada por Google y, en modo prueba, se continúa con **Avanzado**.
+
+## Versión 0.1.1
+
+- **Ayuda → Acerca de…** muestra la versión **0.1.1**.
+
+## Ventanas, traducción y Acerca de (reciente)
+
+- Las barras y los formularios se reorganizan al estrechar o restaurar la ventana: los botones pasan a la línea siguiente y, si el panel no da más alto, el contenido se desplaza en lugar de taparse.
+- La traducción de un correo junta asunto y cuerpo en una petición cuando caben, espacia los trozos largos y reintenta si el servicio limita las peticiones.
+- **Ayuda → Acerca de…** muestra `logo.png` y una lista de funcionalidades al día (cuentas, búsqueda, OpenPGP, agenda, documentación y ventanas adaptables).
+
+## Correo: autenticación, carpetas, envío y cuenta (reciente)
+
+- **OAuth IMAP/SMTP**: la cadena XOAUTH2 se entrega en claro y las bibliotecas la codifican una sola vez. Identificarse con Google o Microsoft vuelve a servir para descargar y enviar.
+- El callback local ignora peticiones sin código (por ejemplo el favicon) para no perder la autorización. La ayuda muestra la URI real `http://127.0.0.1:<puerto>/`. El JSON del Client ID queda en modo `0600`.
+- **Carpetas con espacio o acentos**: el nombre se lee entre comillas (`[Gmail]/All Mail`, `INBOX.Facturas 2024`) y, si el servidor no acepta UTF-8, se usa UTF-7 modificado.
+- **Envío**: el sobre SMTP usa las direcciones reales (nombres con coma y listas con punto y coma). Un adjunto que ya no está en disco detiene el envío. Al redactar se ve «Se enviará a…».
+- **Buzón grande**: la primera descarga sin caché trae los 5000 mensajes más recientes, no los más antiguos, y lo dice en la barra de estado. Los mensajes ya en caché actualizan leído y destacado.
+- Borrar o mover ya no hace `EXPUNGE` de todos los mensajes marcados como eliminados: con UIDPLUS solo expulsa los elegidos.
+- IMAP y SMTP guardan su seguridad por separado. El diálogo de cuenta agrupa identidad, recepción y envío, y resume el modo en una línea.
+
+## OAuth embebido (reciente)
+
+- **Inicio de sesión como Thunderbird**: si el paquete incluye el Client ID de PyQorreos, Gmail y Microsoft se autorizan con «Identificarse con Google/Microsoft» sin configurar Google Cloud ni Azure.
+- Orden de resolución: Preferencias del usuario → variables de entorno → cliente embebido (`oauth_clients.builtin.json` / `.local` / `/usr/share/pyqorreos/`).
+- Preferencias → OAuth muestra el origen activo y deja los campos como override opcional.
+- Herramienta para el empaquetador: `python -m pyqorreos.core.oauth_clients install-builtin`.
+
 ## Árbol multicuenta y carpetas por servidor (reciente)
 
 - **Todas las cuentas en el árbol**: cada cuenta configurada es un nodo raíz desplegable con sus carpetas; la activa va en negrita. Pulsar una carpeta de otra cuenta cambia a esa cuenta y la abre.

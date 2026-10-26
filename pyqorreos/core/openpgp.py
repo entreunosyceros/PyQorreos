@@ -447,16 +447,62 @@ def process_incoming_message(
         return msg, status
     return msg, PgpStatus()
 
-def parse_recipient_emails(*fields: str) -> list[str]:
-    addresses: list[str] = []
+def _normalize_address_separators(field: str) -> str:
+    """Convierte «;» en «,» fuera de comillas para que getaddresses los separe."""
+    out: list[str] = []
+    in_quotes = False
+    for char in field:
+        if char == '"':
+            in_quotes = not in_quotes
+            out.append(char)
+        elif char == ";" and not in_quotes:
+            out.append(",")
+        else:
+            out.append(char)
+    return "".join(out)
+
+
+def _address_is_mailbox(addr: str) -> bool:
+    if "@" not in addr or any(ch.isspace() for ch in addr):
+        return False
+    local, _, domain = addr.partition("@")
+    return bool(local) and "." in domain and not domain.startswith(".") and not domain.endswith(".")
+
+
+def parse_recipient_fields(*fields: str) -> tuple[list[str], list[str]]:
+    """Devuelve (direcciones válidas, fragmentos que no son un correo)."""
+    valid: list[str] = []
+    invalid: list[str] = []
     seen: set[str] = set()
     for field in fields:
-        for _name, addr in getaddresses([field or ""]):
-            key = addr.strip().lower()
-            if key and key not in seen:
+        normalized = _normalize_address_separators(field or "").strip()
+        if not normalized:
+            continue
+        pairs = getaddresses([normalized])
+        if not pairs:
+            invalid.append(normalized)
+            continue
+        for name, addr in pairs:
+            mailbox = (addr or "").strip()
+            if not _address_is_mailbox(mailbox):
+                token = mailbox or (name or "").strip() or normalized
+                if token and token not in invalid:
+                    invalid.append(token)
+                continue
+            key = mailbox.lower()
+            if key not in seen:
                 seen.add(key)
-                addresses.append(addr.strip())
-    return addresses
+                valid.append(mailbox)
+    return valid, invalid
+
+
+def parse_recipient_emails(*fields: str) -> list[str]:
+    valid, invalid = parse_recipient_fields(*fields)
+    if invalid:
+        raise ValueError(
+            "Destinatarios no válidos: " + ", ".join(invalid)
+        )
+    return valid
 
 
 def encrypt_outgoing_message(

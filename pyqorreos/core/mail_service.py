@@ -14,6 +14,7 @@ import re
 import smtplib
 import ssl
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -27,6 +28,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Callable
 
 from pyqorreos.core.account import MailAccount
+from pyqorreos.core.imap_utf7 import decode_imap_utf7, encode_imap_utf7
 from pyqorreos.core.oauth import AuthMethod, build_xoauth2_string
 from pyqorreos.core.classifier import MailCategory, MailClassifier
 from pyqorreos.core.compose_email import (
@@ -73,9 +75,9 @@ def _imap_starttls(conn: imaplib.IMAP4, context: ssl.SSLContext) -> None:
 
 
 def open_imap_connection(account: MailAccount) -> imaplib.IMAP4_SSL | imaplib.IMAP4:
-    """Abre IMAP con SSL/TLS implícito o STARTTLS según la cuenta."""
+    """Abre IMAP según imap_security (ssl, starttls o plain)."""
     context = _mail_ssl_context()
-    if account.use_ssl:
+    if account.imap_security == "ssl":
         return imaplib.IMAP4_SSL(
             account.imap_host,
             account.imap_port,
@@ -87,7 +89,7 @@ def open_imap_connection(account: MailAccount) -> imaplib.IMAP4_SSL | imaplib.IM
         account.imap_port,
         timeout=IMAP_SOCKET_TIMEOUT,
     )
-    if account.use_starttls:
+    if account.imap_security == "starttls":
         _imap_starttls(conn, context)
     return conn
 
@@ -127,6 +129,53 @@ def _parse_list_flags(line: str) -> tuple[str, ...]:
     if not match:
         return ()
     return tuple(flag for flag in match.group("flags").split() if flag)
+
+
+def _unquote_mailbox(token: str) -> str:
+    text = token.strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        inner = text[1:-1]
+        return inner.replace('\\"', '"').replace("\\\\", "\\")
+    return text
+
+
+def parse_list_mailbox(line: str) -> str:
+    """Nombre de buzón de una respuesta LIST, respetando espacios dentro de comillas."""
+    stripped = line.strip()
+    match = _LIST_LINE.match(stripped)
+    if match:
+        return _unquote_mailbox(stripped[match.end():])
+    parts = stripped.rsplit(" ", 1)
+    if len(parts) >= 2:
+        return _unquote_mailbox(parts[-1])
+    return ""
+
+
+def limit_newest_uids(
+    uids: list[bytes],
+    *,
+    has_cache: bool,
+    threshold: int = LARGE_FOLDER_THRESHOLD,
+) -> tuple[list[bytes], tuple[int, int] | None]:
+    """Recorta a los UID más recientes si la carpeta es grande y no hay caché.
+
+    ``uids`` llega de más nuevo a más antiguo. Devuelve (uid, (mostrados, total))
+    cuando recorta, o (uid, None) si se conservan todos.
+    """
+    total = len(uids)
+    if total > threshold and not has_cache:
+        kept = uids[:threshold]
+        return kept, (len(kept), total)
+    return uids, None
+
+
+def _imap_has_capability(imap: imaplib.IMAP4, name: str) -> bool:
+    wanted = name.upper()
+    for cap in imap.capabilities or ():
+        text = cap.decode("ascii", "replace") if isinstance(cap, bytes) else str(cap)
+        if text.upper() == wanted:
+            return True
+    return False
 
 
 @dataclass
@@ -341,6 +390,7 @@ def _summary_from_fetch(
         has_attachments=has_attachments_heuristic(content_type),
         message_id=message_id,
         thread_key=thread_key,
+        folder=folder,
     )
 
 
@@ -363,6 +413,8 @@ class MailService:
         # IMAP no admite comandos concurrentes en la misma conexión.
         self._imap_lock = threading.Lock()
         self._fetch_lock = threading.Lock()
+        self._imap_utf8 = False
+        self._sync_limit: tuple[int, int] | None = None
 
     def connect(self) -> None:
         with self._imap_lock:
@@ -392,8 +444,25 @@ class MailService:
         if self.account.auth_method == AuthMethod.OAUTH2.value:
             auth_string = build_xoauth2_string(self.account.email, self.password)
             conn.authenticate("XOAUTH2", lambda _challenge: auth_string)
+        else:
+            conn.login(self.account.email, self.password)
+        self._enable_imap_utf8(conn)
+
+    def _enable_imap_utf8(self, conn: imaplib.IMAP4_SSL | imaplib.IMAP4) -> None:
+        """Activa UTF-8 en el buzón si el servidor lo anuncia. No desactiva un sí previo."""
+        try:
+            if not _imap_has_capability(conn, "UTF8=ACCEPT"):
+                conn.capability()
+            if not (
+                _imap_has_capability(conn, "UTF8=ACCEPT")
+                and _imap_has_capability(conn, "ENABLE")
+            ):
+                return
+            typ, _data = conn.enable("UTF8=ACCEPT")
+            if typ == "OK":
+                self._imap_utf8 = True
+        except imaplib.IMAP4.error:
             return
-        conn.login(self.account.email, self.password)
 
     def _smtp_login(self, server: smtplib.SMTP) -> None:
         if self.account.auth_method == AuthMethod.OAUTH2.value:
@@ -449,9 +518,11 @@ class MailService:
         return conn
 
     def _quoted_folder(self, folder: str) -> str:
-        if folder.startswith('"') and folder.endswith('"'):
-            return folder
-        return f'"{folder}"'
+        wire = folder if self._imap_utf8 else encode_imap_utf7(folder)
+        if wire.startswith('"') and wire.endswith('"'):
+            return wire
+        escaped = wire.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
 
     def _select_on_imap(
         self, imap: imaplib.IMAP4_SSL | imaplib.IMAP4, folder: str
@@ -498,9 +569,10 @@ class MailService:
             if not raw or not isinstance(raw, bytes):
                 continue
             line = raw.decode("utf-8", errors="replace")
-            parts = line.rsplit(" ", 1)
-            if len(parts) >= 2:
-                name = parts[-1].strip().strip('"')
+            name = parse_list_mailbox(line)
+            if name:
+                if not self._imap_utf8:
+                    name = decode_imap_utf7(name)
                 folders.append(
                     MailFolder(
                         name=name,
@@ -735,12 +807,11 @@ class MailService:
         Reutiliza resúmenes ya conocidos y elimina UIDs que ya no existen
         en el servidor, evitando volver a descargar toda la carpeta.
         """
+        self._sync_limit = None
         server_uids = self.search_all_uids()
-        if (
-            len(server_uids) > LARGE_FOLDER_THRESHOLD
-            and not cached_map
-        ):
-            server_uids = server_uids[-LARGE_FOLDER_THRESHOLD:]
+        server_uids, self._sync_limit = limit_newest_uids(
+            server_uids, has_cache=bool(cached_map)
+        )
         server_uid_strs = [
             uid.decode("ascii", errors="replace")
             if isinstance(uid, bytes)
@@ -776,19 +847,58 @@ class MailService:
                 on_progress(done_new, total_new)
 
         merged: list[MailSummary] = []
+        cached_kept: list[MailSummary] = []
         for uid_str in server_uid_strs:
             if uid_str in fetched:
                 merged.append(fetched[uid_str])
             elif uid_str in cached_map:
-                merged.append(cached_map[uid_str])
+                summary = cached_map[uid_str]
+                merged.append(summary)
+                cached_kept.append(summary)
 
+        self._refresh_cached_flags(
+            cached_kept, cancelled=cancelled, batch_size=batch_size
+        )
         self._removed_uids = cached_uids - server_uid_set
         return merged
+
+    def _refresh_cached_flags(
+        self,
+        summaries: list[MailSummary],
+        *,
+        cancelled: Callable[[], bool] | None,
+        batch_size: int,
+    ) -> None:
+        """Actualiza leído y destacado de los mensajes que ya estaban en caché."""
+        if not summaries:
+            return
+        by_uid = {summary.uid: summary for summary in summaries}
+        uid_bytes = [summary.uid.encode("ascii", "replace") for summary in summaries]
+        with self._imap_lock:
+            self._ensure_connected_unlocked()
+            imap = self._require_imap()
+            for start in range(0, len(uid_bytes), batch_size):
+                if cancelled and cancelled():
+                    return
+                flags_map = self._fetch_flags_batch(
+                    imap, uid_bytes[start : start + batch_size]
+                )
+                for uid, raw in flags_map.items():
+                    summary = by_uid.get(uid)
+                    if summary is None:
+                        continue
+                    summary.seen = "\\Seen" in raw
+                    summary.flagged = "\\Flagged" in raw
 
     @property
     def last_removed_uids(self) -> set[str]:
         """UIDs eliminados del servidor en la última sincronización incremental."""
         return getattr(self, "_removed_uids", set())
+
+    @property
+    def last_sync_limit(self) -> tuple[int, int] | None:
+        """(mostrados, total en el servidor) si la primera sync recortó a los más nuevos."""
+        return self._sync_limit
 
     def fetch_messages(self, limit: int | None = 50) -> list[MailSummary]:
         """Descarga resúmenes; si limit es None, sincroniza todos los mensajes."""
@@ -972,10 +1082,7 @@ class MailService:
             raise ValueError("No hay destinatarios")
         context = _mail_ssl_context()
 
-        use_smtp_ssl = self.account.smtp_port == 465 or (
-            self.account.use_ssl and not self.account.use_starttls
-        )
-        if use_smtp_ssl:
+        if self.account.smtp_security == "ssl":
             with smtplib.SMTP_SSL(
                 self.account.smtp_host,
                 self.account.smtp_port,
@@ -991,7 +1098,7 @@ class MailService:
                 timeout=SMTP_SOCKET_TIMEOUT,
             ) as server:
                 server.ehlo()
-                if self.account.use_starttls:
+                if self.account.smtp_security == "starttls":
                     server.starttls(context=context)
                     server.ehlo()
                 self._smtp_login(server)
@@ -1111,7 +1218,9 @@ class MailService:
             for attachment in files:
                 path = Path(attachment.path)
                 if not path.is_file():
-                    continue
+                    raise FileNotFoundError(
+                        f"No se encuentra el adjunto «{attachment.filename}» ({path})"
+                    )
                 mime_type, _ = mimetypes.guess_type(path.name)
                 maintype, subtype = (
                     mime_type.split("/", 1) if mime_type else ("application", "octet-stream")
@@ -1138,7 +1247,6 @@ class MailService:
             )
             msg = email.message_from_bytes(raw_out)
 
-        recipients = [a.strip() for a in f"{to},{cc},{bcc}".split(",") if a.strip()]
         self._deliver_message(msg, recipients)
 
     def set_flagged(self, uid: str, flagged: bool = True, folder: str | None = None) -> None:
@@ -1194,6 +1302,39 @@ class MailService:
         """Actualiza las reglas de clasificación en caliente."""
         self.classifier = classifier
 
+    def _expunge_uids(
+        self, imap: imaplib.IMAP4_SSL | imaplib.IMAP4, uids: list[str]
+    ) -> None:
+        """Borra solo los UID indicados. Con UIDPLUS usa UID EXPUNGE."""
+        if not uids:
+            return
+        if _imap_has_capability(imap, "UIDPLUS"):
+            failed = False
+            for start in range(0, len(uids), 100):
+                chunk = uids[start : start + 100]
+                status, _data = imap.uid("EXPUNGE", ",".join(chunk))
+                if status != "OK":
+                    failed = True
+                    break
+            if not failed:
+                return
+        status, data = imap.uid("search", None, "DELETED")
+        already: list[str] = []
+        if status == "OK" and data and data[0]:
+            already = [
+                item.decode() if isinstance(item, bytes) else str(item)
+                for item in data[0].split()
+            ]
+        targets = set(uids)
+        others = [uid for uid in already if uid not in targets]
+        for start in range(0, len(others), 100):
+            chunk = others[start : start + 100]
+            imap.uid("store", ",".join(chunk), "-FLAGS", "(\\Deleted)")
+        imap.expunge()
+        for start in range(0, len(others), 100):
+            chunk = others[start : start + 100]
+            imap.uid("store", ",".join(chunk), "+FLAGS", "(\\Deleted)")
+
     def delete_message(self, uid: str, folder: str | None = None) -> None:
         self.delete_messages([uid], folder=folder)
 
@@ -1211,7 +1352,7 @@ class MailService:
                 for start in range(0, len(uids), batch_size):
                     chunk = uids[start : start + batch_size]
                     imap.uid("store", ",".join(chunk), "+FLAGS", "(\\Deleted)")
-                imap.expunge()
+                self._expunge_uids(imap, uids)
             finally:
                 if previous and previous != target:
                     try:
@@ -1260,7 +1401,7 @@ class MailService:
                     if status != "OK":
                         raise RuntimeError(f"No se pudo copiar a {dest_folder}")
                     imap.uid("store", uid, "+FLAGS", "(\\Deleted)")
-                imap.expunge()
+                self._expunge_uids(imap, uids)
             finally:
                 if previous and previous != source:
                     try:
@@ -1513,7 +1654,7 @@ class MailService:
                 try:
                     self._ensure_selected_unlocked(imap, folder)
                     imap.uid("store", replace_uid, "+FLAGS", "(\\Deleted)")
-                    imap.expunge()
+                    self._expunge_uids(imap, [replace_uid])
                 except imaplib.IMAP4.error:
                     pass
             return new_uid
@@ -1644,11 +1785,8 @@ class MailService:
     def test_smtp(self) -> tuple[bool, str]:
         """Comprueba login SMTP sin enviar correo."""
         context = _mail_ssl_context()
-        use_smtp_ssl = self.account.smtp_port == 465 or (
-            self.account.use_ssl and not self.account.use_starttls
-        )
         try:
-            if use_smtp_ssl:
+            if self.account.smtp_security == "ssl":
                 with smtplib.SMTP_SSL(
                     self.account.smtp_host,
                     self.account.smtp_port,
@@ -1663,7 +1801,7 @@ class MailService:
                     timeout=SMTP_SOCKET_TIMEOUT,
                 ) as server:
                     server.ehlo()
-                    if self.account.use_starttls:
+                    if self.account.smtp_security == "starttls":
                         server.starttls(context=context)
                         server.ehlo()
                     self._smtp_login(server)

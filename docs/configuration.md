@@ -12,7 +12,7 @@
 | `~/.config/pyqorreos/preferences.json` | Preferencias (sync, imágenes, hilos, búsqueda multi-carpeta, idioma de traducción, **tema**, plantillas, **OpenPGP**…) |
 | `~/.config/pyqorreos/gnupg/` | Llavero GnuPG de PyQorreos (si no usas `~/.gnupg` del sistema) |
 | `~/.config/pyqorreos/mail_cache.db` | Caché local de correos (incluye índice **FTS5** para la búsqueda en el cuerpo) |
-| `~/.config/pyqorreos/oauth_clients.json` | Client ID y secret OAuth (Gmail / Microsoft) |
+| `~/.config/pyqorreos/oauth_clients.json` | Override opcional de Client ID/secret OAuth (si no, se usa el cliente embebido) |
 | Llavero del sistema | Contraseñas y tokens OAuth (vía `keyring`) |
 
 Los archivos sensibles (`oauth_clients.json`, `accounts.json`, `mail_cache.db`, exportaciones `.eml`/`.mbox`) están en `.gitignore` si se copian al directorio del proyecto; la configuración real vive en `~/.config/pyqorreos/`.
@@ -21,7 +21,7 @@ Los archivos sensibles (`oauth_clients.json`, `accounts.json`, `mail_cache.db`, 
 
 ### Gmail y cuentas
 
-- Para **Gmail** puedes usar **OAuth2** (recomendado) o una [contraseña de aplicación](https://support.google.com/accounts/answer/185833).
+- Para **Gmail** el alta muestra el correo y **Identificarse con Google**. Google no deja usar el Client ID de Thunderbird: la primera vez hay que pegar el de una aplicación de escritorio creada para PyQorreos; se guarda en el equipo y, a partir de ahí, el botón abre el navegador. En el navegador Google avisa de que la aplicación **no está verificada** (el aviso de que no está certificada): es lo previsto y se puede continuar; el detalle está en [Aviso de Google](#aviso-google-no-ha-verificado-esta-aplicación). **Configuración avanzada** muestra puertos, cifrado y la contraseña de aplicación. Mientras la pantalla de consentimiento esté en modo prueba, solo entran los Gmail añadidos como usuarios de prueba.
 - Para **Outlook / Hotmail / MSN / Live** (`@outlook.*`, `@hotmail.*`, `@live.*`, `@msn.com`): elige el preset **Outlook / Hotmail / MSN** o escribe el correo y se autoconfigura. **OAuth2** (Microsoft) es lo recomendado; con contraseña, puede hacer falta una contraseña de aplicación si tienes verificación en dos pasos.
 - **Envío bloqueado por Microsoft** (`550 country not allowed`): el SMTP de Microsoft puede rechazar conexiones desde ciertas redes (VPN, IP de servidor/VPS, país distinto al habitual). No depende del acuse de recibo ni de los adjuntos. Prueba otra red, sin VPN, o envía desde [Outlook en la web](https://outlook.live.com/).
 
@@ -39,6 +39,7 @@ Opciones habituales:
 - Para **GMX** (`@gmx.com`, `@gmx.net`, `@gmx.de`, `@gmx.es`…): preset **GMX** (`imap.gmx.com:993` SSL / `mail.gmx.com:587` STARTTLS). **Importante:** GMX trae **IMAP/POP3 desactivado por defecto**; debes activarlo en el webmail (**Ajustes → POP3 & IMAP → «Habilitar el acceso a esta cuenta mediante POP3 e IMAP» → Guardar**) o el inicio de sesión fallará aunque la contraseña sea correcta. GMX puede volver a desactivarlo tras un periodo largo sin usarlo. [Guía oficial](https://support.gmx.com/pop-imap/toggle.html).
 - Para **Yahoo**: preset Yahoo; contraseña de aplicación habitual en cuentas con 2FA.
 - Para **hosting / cPanel** (Webempresa, Raiola, etc.): preset **Hosting / cPanel**. Suele ser `mail.tudominio.com`, usuario = correo completo, IMAP **993 SSL/TLS**, SMTP **465 SSL** o **587 STARTTLS**. Usa **Probar conexión** antes de guardar.
+- La seguridad de **IMAP y SMTP se elige por separado** (SSL, STARTTLS o sin cifrar). El diálogo muestra una línea con el modo real, por ejemplo «IMAP SSL en el puerto 993 · SMTP STARTTLS en el puerto 587». Una cuenta antigua se migra por el puerto: 993 es IMAP SSL, 143 con STARTTLS sigue en STARTTLS, 465 es SMTP SSL y 587 es SMTP STARTTLS.
 - En Linux, el llavero usa Secret Service (GNOME Keyring, KWallet, etc.).
 
 ### OAuth2 (Gmail y Microsoft)
@@ -49,12 +50,45 @@ Opciones habituales:
 
 </div>
 
-1. En PyQorreos: **Archivo → Preferencias → OAuth** y rellena el **Client ID** y el **Client secret** de cada proveedor que uses. También puedes abrir esa pestaña desde **Cuenta → Añadir / Editar** con el botón «Configurar OAuth en Preferencias…».
-2. Registra una aplicación de **escritorio** en el proveedor (las instrucciones paso a paso están en la misma pestaña OAuth):
-   - **Google:** [Google Cloud Console](https://console.cloud.google.com/) → APIs → Gmail API activada → Credenciales → ID de cliente OAuth → Aplicación de escritorio. URI de redirección: `http://127.0.0.1`.
-   - **Microsoft:** [Entra / Azure Portal](https://portal.azure.com/) → Registros de aplicaciones → Nueva → Aplicaciones móviles y de escritorio → URI `http://127.0.0.1`. Permisos delegados: `IMAP.AccessAsUser.All`, `SMTP.Send`, `offline_access`.
-3. Pulsa **Aceptar** en Preferencias para guardar en `~/.config/pyqorreos/oauth_clients.json`.
-4. En **Cuenta → Añadir / Editar** → Autenticación **OAuth2** → **Identificarse con Google/Microsoft** (válido para Outlook, Hotmail y MSN).
+#### Uso normal (recomendado)
+
+1. **Cuenta → Añadir**. Con Gmail basta el correo y **Identificarse con Google** (o Microsoft).
+2. Autoriza en el navegador. Los tokens se guardan en el llavero y se renuevan solos.
+3. **Configuración avanzada** deja ver servidores, puertos y la alternativa de contraseña.
+
+Thunderbird trae el cliente de Mozilla y Google no permite reutilizarlo. PyQorreos abre el navegador cuando este equipo ya tiene el Client ID de su propia aplicación de escritorio (la primera pulsación de **Identificarse con Google** lo pide y lo guarda en `~/.config/pyqorreos/oauth_clients.json`).
+
+#### Aviso «Google no ha verificado esta aplicación»
+
+Al autorizar el correo, Google muestra una pantalla que dice que la aplicación **no está verificada**. Es el aviso de que PyQorreos **no está certificada por Google**. Aparece porque el Client ID pide el permiso de Gmail (`https://mail.google.com/`) y Google no ha revisado ese proyecto de Cloud. El cliente de Thunderbird no lo muestra porque Mozilla completó esa revisión.
+
+Mientras la pantalla de consentimiento siga en **modo prueba**, el aviso es el comportamiento normal. Para continuar:
+
+1. Pulsa **Avanzado**.
+2. Pulsa **Ir a PyQorreos (no seguro)**. El nombre es el que pusiste a la aplicación en Google Cloud.
+3. Acepta el acceso al correo.
+
+Eso autoriza la cuenta con la que has entrado. En modo prueba, esa cuenta tiene que figurar también en **Usuarios de prueba** de la pantalla de consentimiento (hasta 100). El aviso no tiene que ver con el cifrado del correo: IMAP y SMTP siguen conectando con los servidores de Google por TLS.
+
+Hacer que cualquier Gmail entre sin este aviso exige la verificación de Google del proyecto. El ámbito de Gmail es restringido y esa revisión queda fuera del uso personal.
+
+#### Override opcional (desarrolladores / tu propia app)
+
+Si quieres usar **tu** Client ID en lugar del incluido:
+
+1. **Archivo → Preferencias → OAuth** y rellena Client ID / secret.
+2. Registra una aplicación de escritorio. En la consola la URI es `http://127.0.0.1`. PyQorreos pide la autorización en `http://127.0.0.1:<puerto>/`: el puerto cambia en cada identificación.
+3. Se guarda en `~/.config/pyqorreos/oauth_clients.json` y **sustituye** al cliente embebido.
+
+#### Empaquetar el cliente incluido (quien genera el .deb)
+
+Una sola vez, con Preferencias → OAuth ya rellenado en tu máquina de build:
+
+```bash
+python -m pyqorreos.core.oauth_clients install-builtin
+```
+
+Eso escribe `pyqorreos/resources/oauth_clients.builtin.local.json` (gitignored). Al generar el `.deb`, copia ese fichero a `oauth_clients.builtin.json` dentro del paquete (o a `/usr/share/pyqorreos/`). También puedes definir `PYQORREOS_OAUTH_GMAIL_CLIENT_ID` / `_CLIENT_SECRET` (y lo mismo para `OUTLOOK`) en el entorno de build.
 
 El `refresh_token` se guarda en el llavero de forma permanente; el `access_token` se usa para conectar y se renueva automáticamente al caducar.
 
@@ -69,6 +103,7 @@ El `refresh_token` se guarda en el llavero de forma permanente; el `access_token
 - Las demás cuentas se actualizan al inicio si **Sincronizar cuentas en segundo plano** está activo en Preferencias.
 - La caché local permite ver la bandeja **antes** de que termine la conexión.
 - La **barra de progreso** bajo la lista solo aparece cuando hay mensajes nuevos que descargar; el estado de red (conectado, sincronizando…) se muestra de forma permanente a la derecha de la barra de estado.
+- La **primera** sincronización de una carpeta con más de 5000 mensajes, si aún no hay caché, descarga solo los **5000 más recientes**. La barra de estado lo indica («Mostrando los 5000 más recientes de N»). Las siguientes sincronizaciones traen el correo nuevo y actualizan leído y destacado de lo ya guardado.
 
 ### Cuando el servidor no responde
 
@@ -91,6 +126,7 @@ getent hosts imap.tuservidor.com
 - La **traducción** solo se ejecuta al pulsar «Traducir»; el texto se envía a un servicio en línea gratuito ([deep-translator](https://github.com/nidhaloff/deep-translator)).
 - Configura el idioma destino en **Archivo → Preferencias → General**.
 - El texto se extrae del mensaje (HTML o parte de texto plano) y se limpia de restos de maquetación antes de traducir; el resultado se muestra en modo lectura con enlaces activos.
+- Asunto y cuerpo se envían juntos cuando caben en una petición. Si el mensaje es largo, las peticiones van espaciadas y, si el servicio responde que hay demasiadas, se reintenta con esperas crecientes.
 - Las traducciones se **cachean por mensaje**; «Ver original» restaura el correo sin volver a descargarlo.
 
 ### Acuse de recibo

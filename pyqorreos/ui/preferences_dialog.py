@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QTextEdit,
@@ -31,9 +31,12 @@ from PySide6.QtWidgets import (
 
 from pyqorreos.core.oauth_clients import (
     OAUTH_CLIENTS_FILE,
-    OAUTH_REDIRECT_URI,
+    oauth_redirect_help,
+    embed_oauth_clients,
     gmail_oauth_setup_html,
     load_oauth_clients_data,
+    oauth_client_source,
+    oauth_clients_configured,
     outlook_oauth_setup_html,
     save_oauth_clients_data,
     validate_oauth_clients_data,
@@ -46,6 +49,13 @@ from pyqorreos.core.user_preferences import (
     normalize_compose_snippets,
 )
 from pyqorreos.core.translate import TRANSLATION_LANGUAGES, language_label
+from pyqorreos.ui.flow_layout import (
+    FlowLayout,
+    enable_height_for_width,
+    flow_button,
+    wrapping_combo,
+    wrapping_form,
+)
 from pyqorreos.ui.theme import mark_role, prevent_context_menu
 from pyqorreos.ui.classification_rules_widget import ClassificationRulesWidget
 from pyqorreos.ui.openpgp_keys_dialog import OpenPgpKeysDialog
@@ -71,7 +81,7 @@ class PreferencesDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Preferencias de PyQorreos")
-        self.setMinimumSize(640, 520)
+        self.setMinimumSize(480, 400)
         self._prefs = prefs
         self._oauth_data = load_oauth_clients_data()
         self._snippets: list[dict[str, str]] = copy.deepcopy(
@@ -114,7 +124,7 @@ class PreferencesDialog(QDialog):
         layout = QVBoxLayout(page)
 
         sync_group = QGroupBox("Sincronización con el servidor")
-        sync_form = QFormLayout(sync_group)
+        sync_form = wrapping_form(QFormLayout(sync_group))
 
         self.bg_sync = QCheckBox("Sincronizar cuentas en segundo plano")
         self.bg_sync.setChecked(self._prefs.background_sync_enabled)
@@ -143,7 +153,7 @@ class PreferencesDialog(QDialog):
         layout.addWidget(sync_group)
 
         compose_group = QGroupBox("Redacción")
-        compose_form = QFormLayout(compose_group)
+        compose_form = wrapping_form(QFormLayout(compose_group))
 
         self.compose_read_receipt = QCheckBox(
             "Solicitar acuse de recibo al enviar por defecto"
@@ -158,7 +168,7 @@ class PreferencesDialog(QDialog):
         layout.addWidget(compose_group)
 
         openpgp_group = QGroupBox("OpenPGP (cifrado de extremo a extremo)")
-        openpgp_form = QFormLayout(openpgp_group)
+        openpgp_form = wrapping_form(QFormLayout(openpgp_group))
 
         self.openpgp_enabled = QCheckBox("Activar OpenPGP (solo al leer o enviar mensajes protegidos)")
         self.openpgp_enabled.setChecked(self._prefs.openpgp_enabled)
@@ -209,7 +219,7 @@ class PreferencesDialog(QDialog):
         layout.addWidget(openpgp_group)
 
         download_group = QGroupBox("Descarga de mensajes")
-        download_form = QFormLayout(download_group)
+        download_form = wrapping_form(QFormLayout(download_group))
 
         self.delete_after_download = QCheckBox(
             "Eliminar del servidor al descargar el mensaje completo"
@@ -226,7 +236,7 @@ class PreferencesDialog(QDialog):
         layout.addWidget(download_group)
 
         view_group = QGroupBox("Lista y lectura")
-        view_form = QFormLayout(view_group)
+        view_form = wrapping_form(QFormLayout(view_group))
 
         self.block_images = QCheckBox("Bloquear imágenes remotas al leer")
         self.block_images.setChecked(self._prefs.block_remote_images)
@@ -255,7 +265,7 @@ class PreferencesDialog(QDialog):
         self.page_size.setValue(self._prefs.page_size)
         view_form.addRow("Correos por página:", self.page_size)
 
-        self.sort_combo = QComboBox()
+        self.sort_combo = wrapping_combo(QComboBox(), 14)
         self.sort_combo.addItems(
             ["Fecha (recientes)", "Fecha (antiguos)", "Remitente", "Asunto"]
         )
@@ -268,7 +278,7 @@ class PreferencesDialog(QDialog):
         self.sort_combo.setCurrentIndex(sort_map.get(self._prefs.sort_by, 0))
         view_form.addRow("Ordenar por:", self.sort_combo)
 
-        self.translate_lang = QComboBox()
+        self.translate_lang = wrapping_combo(QComboBox(), 12)
         for code, label in TRANSLATION_LANGUAGES:
             self.translate_lang.addItem(label, code)
         target = self._prefs.translate_target_language
@@ -290,9 +300,9 @@ class PreferencesDialog(QDialog):
         layout.addWidget(view_group)
 
         appearance_group = QGroupBox("Apariencia")
-        appearance_form = QFormLayout(appearance_group)
+        appearance_form = wrapping_form(QFormLayout(appearance_group))
 
-        self.theme_combo = QComboBox()
+        self.theme_combo = wrapping_combo(QComboBox(), 8)
         self.theme_combo.addItem("Claro", "light")
         self.theme_combo.addItem("Oscuro", "dark")
         theme_idx = self.theme_combo.findData(self._prefs.theme)
@@ -322,6 +332,9 @@ class PreferencesDialog(QDialog):
         dialog.exec()
 
     def _build_classification_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         page = QWidget()
         layout = QVBoxLayout(page)
         self._classification_widget = ClassificationRulesWidget(
@@ -329,7 +342,8 @@ class PreferencesDialog(QDialog):
             parent=page,
         )
         layout.addWidget(self._classification_widget)
-        return page
+        scroll.setWidget(page)
+        return scroll
 
     def _build_oauth_tab(self) -> QWidget:
         scroll = QScrollArea()
@@ -340,17 +354,38 @@ class PreferencesDialog(QDialog):
         layout = QVBoxLayout(page)
 
         intro = QLabel(
-            "Para usar OAuth2 con Gmail u Outlook necesitas registrar una aplicación "
-            "de escritorio en el proveedor y pegar aquí el Client ID y el secret. "
-            "Los tokens de sesión de cada cuenta se guardan en el llavero del sistema."
+            "PyQorreos incluye inicio de sesión OAuth integrado para Gmail y "
+            "Microsoft (como Thunderbird): al añadir una cuenta basta con "
+            "«Identificarse con Google/Microsoft», sin registrar nada en Cloud Console.\n\n"
+            "Los campos de abajo son opcionales: solo rellénalos si quieres usar "
+            "tu propia aplicación OAuth en lugar de la incluida. Los tokens de "
+            "cada cuenta se guardan en el llavero del sistema."
         )
         intro.setWordWrap(True)
         mark_role(intro, "hint")
         layout.addWidget(intro)
 
+        status_lines: list[str] = []
+        for key, label in (("gmail", "Gmail"), ("outlook", "Outlook")):
+            source = oauth_client_source(key)
+            if source == "builtin":
+                status_lines.append(f"• {label}: cliente incluido de PyQorreos (listo)")
+            elif source == "user":
+                status_lines.append(f"• {label}: usando tu Client ID de Preferencias")
+            elif source == "env":
+                status_lines.append(f"• {label}: usando variables de entorno")
+            else:
+                status_lines.append(
+                    f"• {label}: sin cliente — configura abajo o usa contraseña de aplicación"
+                )
+        status = QLabel("Estado actual:\n" + "\n".join(status_lines))
+        status.setWordWrap(True)
+        mark_role(status, "hint")
+        layout.addWidget(status)
+
         redirect_note = QLabel(
-            f"URI de redirección que debes configurar en Google y Microsoft: "
-            f"<code>{OAUTH_REDIRECT_URI}</code>"
+            f"URI de redirección (solo si registras tu propia app): "
+            f"<code>{oauth_redirect_help()}</code>"
         )
         redirect_note.setWordWrap(True)
         redirect_note.setTextFormat(Qt.TextFormat.RichText)
@@ -370,7 +405,14 @@ class PreferencesDialog(QDialog):
         self.oauth_show_secrets.toggled.connect(self._toggle_oauth_secret_visibility)
         layout.addWidget(self.oauth_show_secrets)
 
-        file_hint = QLabel(f"Se guardará en: {OAUTH_CLIENTS_FILE}")
+        self.oauth_embed_check = QCheckBox(
+            "Usar también como cliente embebido de esta instalación "
+            "(recomendado: así OAuth funciona sin repetir la configuración)"
+        )
+        self.oauth_embed_check.setChecked(True)
+        layout.addWidget(self.oauth_embed_check)
+
+        file_hint = QLabel(f"Override de usuario: {OAUTH_CLIENTS_FILE}")
         file_hint.setWordWrap(True)
         mark_role(file_hint, "hint")
         layout.addWidget(file_hint)
@@ -391,7 +433,7 @@ class PreferencesDialog(QDialog):
         mark_role(steps, "hint")
         form.addWidget(steps)
 
-        fields = QFormLayout()
+        fields = wrapping_form(QFormLayout())
         client_id = QLineEdit()
         client_id.setPlaceholderText("Client ID / ID de aplicación")
         client_secret = QLineEdit()
@@ -436,6 +478,10 @@ class PreferencesDialog(QDialog):
         }
 
     def _build_snippets_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
         page = QWidget()
         layout = QVBoxLayout(page)
 
@@ -447,49 +493,61 @@ class PreferencesDialog(QDialog):
         mark_role(snippets_hint, "hint")
         layout.addWidget(snippets_hint)
 
-        snippets_body = QHBoxLayout()
+        columns = QWidget()
+        enable_height_for_width(columns, vertical=QSizePolicy.Policy.Expanding)
+        snippets_body = FlowLayout(columns, hspacing=12, vspacing=8)
 
-        list_col = QVBoxLayout()
-        list_col.addWidget(QLabel("Plantillas guardadas:"))
+        list_col = QWidget()
+        list_col.setMinimumWidth(140)
+        list_layout = QVBoxLayout(list_col)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        list_layout.addWidget(QLabel("Plantillas guardadas:"))
         self.snippet_list = QListWidget()
-        self.snippet_list.setMinimumWidth(200)
+        self.snippet_list.setMinimumWidth(120)
+        self.snippet_list.setMinimumHeight(140)
         self.snippet_list.currentRowChanged.connect(self._on_snippet_selected)
-        list_col.addWidget(self.snippet_list, 1)
+        list_layout.addWidget(self.snippet_list, 1)
 
-        list_btns = QHBoxLayout()
-        self.btn_snippet_add = QPushButton("Añadir")
+        list_btns = FlowLayout(hspacing=8, vspacing=6)
+        self.btn_snippet_add = flow_button(QPushButton("Añadir"))
         self.btn_snippet_add.clicked.connect(self._add_snippet)
-        self.btn_snippet_remove = QPushButton("Eliminar")
+        self.btn_snippet_remove = flow_button(QPushButton("Eliminar"))
         self.btn_snippet_remove.clicked.connect(self._remove_snippet)
         list_btns.addWidget(self.btn_snippet_add)
         list_btns.addWidget(self.btn_snippet_remove)
-        list_col.addLayout(list_btns)
-        snippets_body.addLayout(list_col, 1)
+        list_layout.addLayout(list_btns)
+        list_col.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        snippets_body.addWidget(list_col)
 
-        editor_col = QVBoxLayout()
-        name_row = QHBoxLayout()
-        name_row.addWidget(QLabel("Nombre:"))
+        editor_col = QWidget()
+        editor_col.setMinimumWidth(180)
+        editor_layout = QVBoxLayout(editor_col)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        name_form = wrapping_form(QFormLayout())
         self.snippet_name_edit = QLineEdit()
         self.snippet_name_edit.setPlaceholderText("Ej. Saludo formal")
         self.snippet_name_edit.textChanged.connect(self._on_snippet_editor_changed)
-        name_row.addWidget(self.snippet_name_edit, 1)
-        editor_col.addLayout(name_row)
+        name_form.addRow("Nombre:", self.snippet_name_edit)
+        editor_layout.addLayout(name_form)
 
-        editor_col.addWidget(QLabel("Texto:"))
+        editor_layout.addWidget(QLabel("Texto:"))
         self.snippet_text_edit = QTextEdit()
         self.snippet_text_edit.setPlaceholderText("Texto que se insertará en el mensaje…")
-        self.snippet_text_edit.setMinimumHeight(200)
+        self.snippet_text_edit.setMinimumHeight(160)
         self.snippet_text_edit.textChanged.connect(self._on_snippet_editor_changed)
-        editor_col.addWidget(self.snippet_text_edit, 1)
+        editor_layout.addWidget(self.snippet_text_edit, 1)
 
-        self.btn_snippet_defaults = QPushButton("Restaurar plantillas predeterminadas")
+        self.btn_snippet_defaults = flow_button(
+            QPushButton("Restaurar plantillas predeterminadas")
+        )
         self.btn_snippet_defaults.clicked.connect(self._restore_default_snippets)
-        editor_col.addWidget(self.btn_snippet_defaults)
+        editor_layout.addWidget(self.btn_snippet_defaults)
+        editor_col.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        snippets_body.addWidget(editor_col)
+        layout.addWidget(columns, 1)
 
-        snippets_body.addLayout(editor_col, 2)
-        layout.addLayout(snippets_body, 1)
-
-        return page
+        scroll.setWidget(page)
+        return scroll
 
     def _reload_snippet_list(self, select_row: int | None = None) -> None:
         self._snippet_sync_blocked = True
@@ -600,6 +658,14 @@ class PreferencesDialog(QDialog):
         )
         save_oauth_clients_data(oauth_data)
         self._oauth_data = oauth_data
+        if self.oauth_embed_check.isChecked() and any(
+            str((oauth_data.get(key) or {}).get("client_id", "")).strip()
+            for key in ("gmail", "outlook")
+        ):
+            try:
+                embed_oauth_clients(oauth_data, local=True)
+            except ValueError:
+                pass
         self.accept()
 
     def get_preferences(self) -> UserPreferences:
